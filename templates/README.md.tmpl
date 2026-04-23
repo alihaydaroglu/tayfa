@@ -1,0 +1,78 @@
+# {{PROJECT_NAME}} Coordination
+
+All active workstreams for {{PROJECT_NAME}}. Each workstream has its
+own coordination file with tasks, memos, and change log. Agents are
+global — see [AGENTS.md](AGENTS.md) for who's who — and can work
+across multiple streams simultaneously.
+
+> **New agent / fresh context?** Read [ONBOARDING.md](ONBOARDING.md) first —
+> it walks you through the opening ritual (understand the system,
+> find your work via `tayfa-inbox`, read your scratchboard + workstream
+> file + linked specs).
+
+## Workstreams
+
+| File | Scope | Status |
+|------|-------|--------|
+| _(none yet — `tayfa-add-workstream <name>` to create one)_ | | |
+
+## How to use this directory
+
+- **Agents** find their open work by running `tayfa-inbox <tag>` (see below). For a manual view, search coordination files for `@<tag>`.
+- **Tasks** live in the coordination file for their workstream, not in scratchboards.
+- **Memos** live in the stream that owns them. Cross-reference across streams by linking, never duplicate.
+- **Scratchboards** under `scratchboards/<agent>/main.md` are personal workspaces — not read by other agents. Sophisticated agents may build their own memory system in their directory (multiple files, subdirs) but the baseline is a single `main.md`.
+
+## Inbox tool
+
+```
+$ tayfa-inbox backend
+============================================================
+  INBOX for @backend
+  (/path/to/project/dev/coordination)
+============================================================
+
+── OPEN TASKS (3) ──
+  webapp.md:50  **Admin project viewer.** ...
+  webapp.md:51  **Dialogue TTS endpoint + schema.** ...
+  ...
+
+── OPEN BUGS (0) ──
+  (none)
+
+── MEMOS ADDRESSED TO YOU (6) ──
+  webapp.md:159  <URGENT> Orch poll loop dies after first job
+  ...
+
+Total open items: 9
+```
+
+Filters out change-log entries, registry rows, and resolved items
+(struck-through memos, `#tag` acknowledgements). Always the first
+thing to run when picking up session context.
+
+## Structure
+
+```
+dev/coordination/
+├── README.md              ← you are here
+├── AGENTS.md              ← global agent registry
+├── ONBOARDING.md          ← opening ritual for fresh contexts
+├── <workstream>.md        ← one per active workstream
+└── scratchboards/
+    └── <agent>/main.md    ← per-agent private workspace
+```
+
+## Naming conventions
+
+- `@tag` = agent has active work on an item
+- `#tag` = agent has completed their part
+- Completed tasks move to the `## Done` / `## Fixed` section with tags flipped
+- Resolved memos are struck through with `~~` so agents skip them when scanning
+- Coordination files should stay under ~300 lines; housekeep when they exceed
+
+## Adding a new workstream
+
+1. Run `tayfa-add-workstream <name>` (creates `<name>.md` from the template)
+2. Add a row to the table above
+3. Register any new agents in `AGENTS.md` (`tayfa-add-agent <tag>`)

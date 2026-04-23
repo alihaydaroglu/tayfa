@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Show all open items addressed to an agent across coordination files.
+
+Usage:
+    tayfa-inbox <tag>                          # auto-discover coord dir
+    tayfa-inbox @<tag>                         # @ is optional
+    tayfa-inbox --coord-dir <path> <tag>       # explicit coord dir
+
+Discovery: walks up from the current working directory looking for
+`dev/coordination/AGENTS.md`. The directory containing AGENTS.md is the
+coord dir.
+
+Scans every `*.md` in the coord dir (except README.md, AGENTS.md,
+ONBOARDING.md) for:
+  - Open tasks: unchecked "[ ]" items inside "### Tasks — @<tag>" sections
+  - Open bugs:  unchecked "[ ]" items inside "### Bugs  — @<tag>" sections
+  - Memos: "### ..." sections containing "**To:** ... @<tag>" where the
+    header is not struck through (~~) and the tag has not been flipped
+    to # in the To: line.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+SKIP_FILES = {"README.md", "AGENTS.md", "ONBOARDING.md"}
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    """Walk up from `start` looking for `dev/coordination/AGENTS.md`."""
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def iter_sections(lines: list[str]):
+    """Yield (header_text, section_body_lines, header_line_no) for each ### section."""
+    header_re = re.compile(r"^### (.+)")
+    current_header = None
+    current_start = 0
+    current_body: list[tuple[int, str]] = []
+
+    for i, line in enumerate(lines, start=1):
+        m = header_re.match(line)
+        if m:
+            if current_header is not None:
+                yield current_header, current_body, current_start
+            current_header = m.group(1)
+            current_start = i
+            current_body = []
+        elif line.startswith("## ") and current_header is not None:
+            yield current_header, current_body, current_start
+            current_header = None
+            current_body = []
+        else:
+            if current_header is not None:
+                current_body.append((i, line))
+
+    if current_header is not None:
+        yield current_header, current_body, current_start
+
+
+def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, int, str]]]:
+    """Return {category: [(file, line_no, text), ...]}."""
+    tag_at = f"@{tag}"
+    tag_hash = f"#{tag}"
+
+    open_tasks: list[tuple[Path, int, str]] = []
+    open_bugs: list[tuple[Path, int, str]] = []
+    memos: list[tuple[Path, int, str]] = []
+
+    unchecked = re.compile(r"^\s*(?:\d+\.|[-*])\s*\[\s\]\s*(.+)")
+
+    for f in files:
+        if not f.exists():
+            continue
+        lines = f.read_text(encoding="utf-8").splitlines()
+
+        for header, body, header_line in iter_sections(lines):
+            is_task_section = header.startswith(f"Tasks — {tag_at}")
+            is_bug_section = header.startswith(f"Bugs — {tag_at}")
+            bucket = (
+                open_tasks if is_task_section
+                else open_bugs if is_bug_section
+                else None
+            )
+            if bucket is not None:
+                for line_no, line in body:
+                    m = unchecked.match(line)
+                    if m:
+                        bucket.append((f, line_no, m.group(1).strip()))
+                continue
+
+            if "~~" in header:
+                continue
+            addressed = False
+            acknowledged = False
+            for _line_no, line in body:
+                if line.startswith("**To:**"):
+                    if tag_at in line:
+                        addressed = True
+                    if tag_hash in line:
+                        acknowledged = True
+            if addressed and not acknowledged:
+                memos.append((f, header_line, header))
+
+    return {"tasks": open_tasks, "bugs": open_bugs, "memos": memos}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Show open items addressed to an agent across coordination files.",
+    )
+    parser.add_argument("tag", help="Agent tag (with or without leading @)")
+    parser.add_argument(
+        "--coord-dir",
+        type=Path,
+        default=None,
+        help="Path to the coordination directory (default: walk up from cwd looking for dev/coordination/AGENTS.md)",
+    )
+    args = parser.parse_args()
+
+    tag = args.tag.lstrip("@")
+
+    coord_dir = args.coord_dir
+    if coord_dir is None:
+        coord_dir = find_coord_dir(Path.cwd())
+        if coord_dir is None:
+            print(
+                "ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.\n"
+                "       Pass --coord-dir <path> or cd into a tayfa-initialised project.",
+                file=sys.stderr,
+            )
+            return 1
+    elif not (coord_dir / "AGENTS.md").is_file():
+        print(f"ERROR: {coord_dir} does not look like a coord dir (no AGENTS.md).", file=sys.stderr)
+        return 1
+
+    files = sorted(f for f in coord_dir.glob("*.md") if f.name not in SKIP_FILES)
+    results = find_open_items(tag, files)
+
+    width = 60
+    print("=" * width)
+    print(f"  INBOX for @{tag}")
+    print(f"  ({coord_dir})")
+    print("=" * width)
+    print()
+
+    sections = [
+        ("OPEN TASKS", results["tasks"]),
+        ("OPEN BUGS", results["bugs"]),
+        ("MEMOS ADDRESSED TO YOU", results["memos"]),
+    ]
+    total = sum(len(items) for _, items in sections)
+
+    for label, items in sections:
+        print(f"── {label} ({len(items)}) ──")
+        if not items:
+            print("  (none)")
+        else:
+            for f, line_no, text in items:
+                rel = f.name
+                display = text if len(text) <= 90 else text[:87] + "..."
+                print(f"  {rel}:{line_no}  {display}")
+        print()
+
+    if total == 0:
+        print("Inbox zero. You're clear.")
+    else:
+        print(f"Total open items: {total}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

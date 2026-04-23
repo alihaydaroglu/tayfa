@@ -1,0 +1,72 @@
+# Agent Registry
+
+Global registry of all agents working on {{PROJECT_NAME}}. Agents are
+defined once here; coordination files reference them by `@tag`. An
+agent can work across multiple workstreams — see [README.md](README.md)
+for the list.
+
+## Agents
+
+| Tag | Role | Scratchboard | Active in |
+|-----|------|--------------|-----------|
+| _(none yet — `tayfa-add-agent <tag>` to register one)_ | | | |
+
+## Conventions
+
+### Finding your work
+
+Run the inbox tool — it scans every coordination file and lists open
+tasks, open bugs, and unresolved memos addressed to you:
+
+```
+tayfa-inbox <your_tag>
+```
+
+e.g. `tayfa-inbox design` or `tayfa-inbox compute`. Output is grouped,
+with file:line refs so you can jump to anything. Resolved memos
+(struck through) and tasks you've already flipped to `#tag` are
+filtered out automatically.
+
+If the tool isn't available, a raw grep works as a fallback:
+`grep -rn "@<tag>" *.md` — but expect noise (registry rows, authorship,
+change log entries). The inbox tool filters those out.
+
+### Finishing work
+
+When you complete a task or address a memo:
+1. Flip your tag from `@tag` → `#tag` in the coordination file
+2. Move completed tasks to the `## Done` section if the file has one
+3. Strike through fully-resolved memos with `~~`
+4. Update the change log with one line describing what changed
+
+### Scratchboards
+
+Each agent has a personal directory at `scratchboards/<tag>/`. The
+baseline is one file, `main.md`, which is private — other agents don't
+read it. If an agent needs richer memory (sub-files, notes, experiment
+logs), they can add more files to their directory without coordinating
+with anyone.
+
+Scratchboards are for personal planning, half-formed thoughts, and
+detailed notes. Cross-agent communication happens in coordination files
+only.
+
+### Cross-stream coordination
+
+A task in stream A that needs help from stream B:
+1. Keep the task in stream A (it owns the work)
+2. Add a memo to stream B linking back to stream A's task
+3. Don't duplicate content — just cross-reference
+
+### Adding a new agent
+
+1. Run `tayfa-add-agent <tag>` (creates the scratchboard skeleton)
+2. Add a row to the table above with tag, role, scratchboard path, and active streams
+3. Reference the agent in the coordination files where they have active work
+
+## Agent model choice
+
+Agents may be human, LLM, or hybrid. The coordination system doesn't
+care — what matters is that each `@tag` corresponds to one "mind" that
+picks up and completes tasks. Specialist agents are typically LLM-driven
+and spin up for specific scopes, then retire when their work is done.

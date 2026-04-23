@@ -1,0 +1,94 @@
+# Agent Onboarding
+
+Read this first when spinning up a fresh context. You should be able to
+go from "I don't know anything" to "working on my tasks" in about 15
+minutes.
+
+## 1. Know the system (~2 min)
+
+Read [README.md](README.md) and [AGENTS.md](AGENTS.md). You'll learn:
+- The coordination system has multiple workstreams. Each has its own file.
+- You're an agent with a `@tag`. Other agents address you by that tag.
+- Your personal notes live in `scratchboards/<your_tag>/main.md`.
+- When you finish a task, flip `@tag` → `#tag`.
+
+## 2. Understand the project (~10 min, REQUIRED)
+
+Read {{PROJECT_DOC_PATH}} — **the whole file**. Even bug-fix agents
+need this context. You can't meaningfully fix a part of a system
+without knowing what the whole system does.
+
+> **TODO when scaffolding:** replace `{{PROJECT_DOC_PATH}}` above with
+> the actual path to this project's main architecture / overview doc
+> (e.g. `architecture.md`, `docs/overview.md`, `ARCHITECTURE.md`). If
+> the project has no such doc, list the top-level entry points instead
+> (`README.md`, `src/main.py`, etc.) — but consider writing one.
+
+After reading, you should be able to answer the basic "what does this
+project do, what are its major components, what are the hard
+constraints" questions. If you can't, re-read. Don't skip this step —
+it's the difference between "I changed code that compiles" and "I
+changed code that fits the system."
+
+## 3. Find your work (~1 min)
+
+```
+tayfa-inbox <your_tag>
+```
+
+This lists:
+- Open tasks addressed to you (unchecked `[ ]` in `Tasks — @<tag>` sections)
+- Open bugs addressed to you
+- Unresolved memos addressed to you
+
+Everything comes with file:line refs so you can jump straight to
+context. If your inbox is empty, ask the user what they want you to do.
+
+## 4. Read your scratchboard (~1 min)
+
+```
+dev/coordination/scratchboards/<your_tag>/main.md
+```
+
+Your own notes from prior sessions. Plans, half-formed thoughts, links
+you gathered, things you decided but didn't finish writing up.
+
+## 5. Read the workstream's coordination file (~3 min)
+
+The inbox output tells you which coordination file(s) your work lives
+in. Read the **Current Sprint** section for the overall goal, then
+skim the other agents' tasks so you know what's happening around you.
+Don't read the entire file — it has historical change log and past
+sprint notes you can ignore.
+
+## 6. Read the specs linked from your task (varies)
+
+Your task entries in the coordination file should link to specs or
+design docs. Those are the design contract — read the ones your work
+touches.
+
+## Opening ritual (summary)
+
+```bash
+cat dev/coordination/README.md
+cat dev/coordination/AGENTS.md
+cat {{PROJECT_DOC_PATH}}                       # REQUIRED, not optional
+tayfa-inbox <your_tag>
+cat dev/coordination/scratchboards/<your_tag>/main.md
+# ...then the workstream file and linked specs
+```
+
+## When you're done
+
+1. Flip `@tag` → `#tag` on completed items
+2. Add a one-line entry to the workstream's Change Log
+3. Update your scratchboard with anything future-you should remember
+4. If you resolved a memo addressed to you, strike it through with `~~`
+   only after ALL addressed agents have flipped their tags to `#`
+
+## When you're stuck
+
+- Post a memo in the relevant coordination file tagged at the agent who
+  can unblock you.
+- If the blocker is a design decision, tag the design owner.
+- Don't silently wait — memos are the explicit async channel.
