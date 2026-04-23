@@ -42,41 +42,55 @@ immediately — no re-install needed.
 Invoke from Claude Code with `/tayfa-init`, `/tayfa-onboard backend`,
 etc., or let Claude pick the right one based on intent.
 
-## CLI
+## CLI — core
 
 ```
-tayfa-inbox <tag>                       # tasks/bugs/memos addressed to @tag
-tayfa-roster                            # awake agents (PID-validated)
-tayfa-ping <tag> "<message>"            # ping an agent (tmux + log + notify)
+tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag
 ```
 
-All three walk up from the current working directory looking for
-`dev/coordination/AGENTS.md` and use the directory they find. Pass
+That's the whole essential surface area. `tayfa-inbox` walks up from
+the current working directory looking for
+`dev/coordination/AGENTS.md` and uses the directory it finds. Pass
 `--coord-dir <path>` to override.
 
-### Presence + ping
+The four core skills (`tayfa-init`, `tayfa-add-agent`,
+`tayfa-add-workstream`, `tayfa-onboard`) plus the inbox CLI are all
+you need to use tayfa. Stop here if that's all you want.
 
-Every agent that runs `/tayfa-onboard <tag>` registers itself in
-`dev/coordination/.presence/<tag>.json` (PID, tty, tmux target, start
-time). `tayfa-roster` reads that directory, validates each entry by
-`kill -0 <pid>` (and `tmux has-session` if a tmux target was
-recorded), and prunes stale ones inline. No background heartbeat
-required — when the session dies, the PID stops being valid and the
-entry is GC'd on the next roster read.
+## Optional: presence + real-time pinging
 
-`tayfa-ping <tag> "<message>"` always appends to
-`dev/coordination/.pings/<tag>.log` (the durable inbox — surfaced on
-that agent's next `tayfa-onboard`), and additionally:
-- if the recipient has a tmux target, injects the message into their
-  pane via `tmux send-keys` (real-time wake-up).
-- fires `notify-send` to your desktop if available (so you see it
-  too).
+An opt-in add-on for projects that want agents to be able to ping
+each other in real time. **Ignore this section unless you actually
+want it** — the core flow above works fine without any of it.
 
-Tag collisions are refused: if `@backend` is already registered with
-a live PID, a second session can't claim the same tag — pick a
-different one.
+```
+tayfa-roster                  # list awake agents (PID-validated)
+tayfa-ping <tag> "<message>"  # tmux send-keys + log + notify
+```
 
-`.presence/` and `.pings/` are gitignored automatically by `tayfa-init`.
+How it works:
+
+- An agent opts in by running
+  `bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>` (the
+  `tayfa-onboard` skill describes this in its "Optional: enable
+  real-time pinging" section). That writes
+  `dev/coordination/.presence/<tag>.json` with the session's PID, tty,
+  and tmux target.
+- `tayfa-roster` lists everyone who has registered, validating each
+  entry by `kill -0 <pid>` (and `tmux has-session` if a tmux target
+  was recorded) and pruning stale ones inline. No background
+  heartbeat — when the session dies, the PID stops being valid.
+- `tayfa-ping <tag> "<message>"` always appends to
+  `dev/coordination/.pings/<tag>.log` (durable; surfaced on the
+  recipient's next `register_presence.sh`), and additionally
+  `tmux send-keys` if a tmux target was recorded, and `notify-send`
+  if available.
+- Tag collisions are refused: if `@backend` is registered with a live
+  PID, a second session can't claim the same tag.
+
+The `.presence/` and `.pings/` directories are gitignored
+automatically by `tayfa-init`, so they're harmless even if you never
+use the ping system.
 
 ## Conventions in one breath
 

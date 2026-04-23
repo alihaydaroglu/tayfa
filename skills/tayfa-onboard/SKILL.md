@@ -15,15 +15,6 @@ Do these steps in order. Each one is short — the whole thing is ~15
 minutes of reading. Don't skip steps even if you think you know the
 project.
 
-0. **Register your presence.** Records your session's PID so other
-   agents can `tayfa-roster` (see who's awake) and `tayfa-ping <tag>`
-   (deliver a real-time message). Refuses if the tag is already taken
-   by a live session — pick a different tag and tell the user if so.
-   Also surfaces any pings that arrived while you were offline.
-   ```bash
-   bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
-   ```
-
 1. **Know the system.** Read `dev/coordination/README.md` and
    `dev/coordination/AGENTS.md`. You'll learn the workstream layout,
    the agent registry, and the `@tag` / `#tag` / `~~` conventions.
@@ -72,3 +63,20 @@ Then start work.
 3. Update your scratchboard with anything future-you should remember.
 4. If you resolved a memo addressed to you, strike its header through
    with `~~` only after **all** addressed agents have flipped to `#`.
+
+## Optional: enable real-time pinging
+
+Tayfa ships an opt-in presence registry so other agents can `tayfa-ping
+<tag>` you in real time (and `tayfa-roster` to see who's awake). It is
+**not required** — tasks, memos, and the inbox work fine without it.
+Skip this section unless the user has asked for ping/roster.
+
+If the user wants pinging enabled for this session, run:
+
+```bash
+bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
+```
+
+This writes the session's PID to `dev/coordination/.presence/<tag>.json`
+and surfaces any pings queued in `.pings/<tag>.log` from while the tag
+was offline. Refuses if the tag is already taken by a live session.
