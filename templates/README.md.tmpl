@@ -23,7 +23,15 @@ across multiple streams simultaneously.
 - **Memos** live in the stream that owns them. Cross-reference across streams by linking, never duplicate.
 - **Scratchboards** under `scratchboards/<agent>/main.md` are personal workspaces — not read by other agents. Sophisticated agents may build their own memory system in their directory (multiple files, subdirs) but the baseline is a single `main.md`.
 
-## Inbox tool
+## CLI tools
+
+| Tool | What it does |
+|------|--------------|
+| `tayfa-inbox <tag>` | List open tasks, bugs, and unresolved memos addressed to `@tag`. First thing to run when picking up session context. |
+| `tayfa-roster` | List agents currently awake (registered + their session PID is alive). |
+| `tayfa-ping <tag> "<msg>"` | Deliver a real-time ping to `@tag`: tmux send-keys (if recorded) + durable log + desktop notification. |
+
+Sample inbox output:
 
 ```
 $ tayfa-inbox backend
@@ -34,22 +42,19 @@ $ tayfa-inbox backend
 
 ── OPEN TASKS (3) ──
   webapp.md:50  **Admin project viewer.** ...
-  webapp.md:51  **Dialogue TTS endpoint + schema.** ...
   ...
 
 ── OPEN BUGS (0) ──
   (none)
 
-── MEMOS ADDRESSED TO YOU (6) ──
+── MEMOS ADDRESSED TO YOU (1) ──
   webapp.md:159  <URGENT> Orch poll loop dies after first job
-  ...
 
-Total open items: 9
+Total open items: 4
 ```
 
 Filters out change-log entries, registry rows, and resolved items
-(struck-through memos, `#tag` acknowledgements). Always the first
-thing to run when picking up session context.
+(struck-through memos, `#tag` acknowledgements).
 
 ## Structure
 
@@ -59,8 +64,12 @@ dev/coordination/
 ├── AGENTS.md              ← global agent registry
 ├── ONBOARDING.md          ← opening ritual for fresh contexts
 ├── <workstream>.md        ← one per active workstream
-└── scratchboards/
-    └── <agent>/main.md    ← per-agent private workspace
+├── scratchboards/
+│   └── <agent>/main.md    ← per-agent private workspace
+├── .presence/             ← live-session registry (gitignored)
+│   └── <tag>.json         ← written by tayfa-onboard, GC'd by tayfa-roster
+└── .pings/                ← durable ping log (gitignored)
+    └── <tag>.log          ← appended by tayfa-ping
 ```
 
 ## Naming conventions

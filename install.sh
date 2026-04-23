@@ -37,15 +37,17 @@ done
 
 echo
 if [[ -d "$BIN_DST" ]]; then
-    echo "Installing tayfa-inbox into $BIN_DST"
-    link_one "$BIN_SRC/tayfa-inbox" "$BIN_DST/tayfa-inbox"
+    echo "Installing tayfa CLIs into $BIN_DST"
+    for tool in tayfa-inbox tayfa-roster tayfa-ping; do
+        link_one "$BIN_SRC/$tool" "$BIN_DST/$tool"
+    done
     if ! echo ":$PATH:" | grep -q ":$BIN_DST:"; then
         echo
         echo "  NOTE: $BIN_DST is not on your PATH. Add this to your shell rc:"
         echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 else
-    echo "Skipping tayfa-inbox install — $BIN_DST does not exist."
+    echo "Skipping CLI install — $BIN_DST does not exist."
     echo "Either create it (mkdir -p $BIN_DST) and re-run, or manually add"
     echo "  $BIN_SRC"
     echo "to your PATH."

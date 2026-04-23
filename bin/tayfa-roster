@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""List awake agents in the current tayfa project.
+
+Reads `dev/coordination/.presence/*.json`, validates each entry's PID
+is still alive, prunes stale entries, and prints a roster.
+
+Usage:
+    tayfa-roster                          # auto-discover coord dir
+    tayfa-roster --coord-dir <path>
+    tayfa-roster --json                   # machine-readable output
+
+Liveness check: `kill(pid, 0)`. If a tmux_target is recorded, also
+verify with `tmux has-session`. Either failing → entry deleted.
+"""
+from __future__ import annotations
+
+import argparse
+import errno
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours
+    except OSError as e:
+        return e.errno != errno.ESRCH
+    return True
+
+
+def tmux_target_alive(target: str) -> bool:
+    if not shutil.which("tmux"):
+        return True  # can't check; trust it
+    session = target.split(":", 1)[0]
+    return subprocess.run(
+        ["tmux", "has-session", "-t", session],
+        capture_output=True,
+    ).returncode == 0
+
+
+def load_entry(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def is_alive(entry: dict) -> bool:
+    pid = entry.get("pid")
+    if not isinstance(pid, int) or not pid_alive(pid):
+        return False
+    target = entry.get("tmux_target")
+    if target and not tmux_target_alive(target):
+        return False
+    return True
+
+
+def humanize_uptime(started_iso: str) -> str:
+    try:
+        started = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return "?"
+    delta = datetime.now(timezone.utc) - started
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{secs}s"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m"
+    hours, mins = divmod(mins, 60)
+    if hours < 24:
+        return f"{hours}h {mins}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="List awake agents in a tayfa project.",
+    )
+    parser.add_argument("--coord-dir", type=Path, default=None)
+    parser.add_argument("--json", action="store_true", help="JSON output")
+    args = parser.parse_args()
+
+    coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
+    if coord_dir is None:
+        print(
+            "ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
+            file=sys.stderr,
+        )
+        return 1
+
+    presence_dir = coord_dir / ".presence"
+    if not presence_dir.is_dir():
+        if args.json:
+            print("[]")
+        else:
+            print("No agents registered. (No .presence/ directory.)")
+        return 0
+
+    awake: list[tuple[Path, dict]] = []
+    pruned: list[str] = []
+
+    for path in sorted(presence_dir.glob("*.json")):
+        entry = load_entry(path)
+        if entry is None or not is_alive(entry):
+            try:
+                path.unlink()
+                pruned.append(path.stem)
+            except OSError:
+                pass
+            continue
+        awake.append((path, entry))
+
+    if args.json:
+        print(json.dumps([entry for _, entry in awake], indent=2))
+        return 0
+
+    if not awake:
+        print("No awake agents.")
+        if pruned:
+            print(f"Pruned {len(pruned)} stale entr{'y' if len(pruned)==1 else 'ies'}: {', '.join('@'+t for t in pruned)}")
+        return 0
+
+    print(f"{'TAG':<22} {'PID':>7}  {'TTY':<14} {'TMUX':<18} {'UPTIME':>8}")
+    for _, e in awake:
+        tag = "@" + e.get("tag", "?")
+        pid = str(e.get("pid", "?"))
+        tty = (e.get("tty") or "-")[:14]
+        tmux = (e.get("tmux_target") or "-")[:18]
+        uptime = humanize_uptime(e.get("started_at", ""))
+        print(f"{tag:<22} {pid:>7}  {tty:<14} {tmux:<18} {uptime:>8}")
+
+    if pruned:
+        print()
+        print(f"Pruned {len(pruned)} stale entr{'y' if len(pruned)==1 else 'ies'}: {', '.join('@'+t for t in pruned)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

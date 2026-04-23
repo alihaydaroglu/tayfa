@@ -15,6 +15,15 @@ Do these steps in order. Each one is short — the whole thing is ~15
 minutes of reading. Don't skip steps even if you think you know the
 project.
 
+0. **Register your presence.** Records your session's PID so other
+   agents can `tayfa-roster` (see who's awake) and `tayfa-ping <tag>`
+   (deliver a real-time message). Refuses if the tag is already taken
+   by a live session — pick a different tag and tell the user if so.
+   Also surfaces any pings that arrived while you were offline.
+   ```bash
+   bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
+   ```
+
 1. **Know the system.** Read `dev/coordination/README.md` and
    `dev/coordination/AGENTS.md`. You'll learn the workstream layout,
    the agent registry, and the `@tag` / `#tag` / `~~` conventions.

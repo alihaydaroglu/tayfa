@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Ping an awake agent in the current tayfa project.
+
+Looks up the agent's presence record and delivers the message via every
+available channel:
+  - tmux send-keys (if presence has a tmux_target)
+  - append to dev/coordination/.pings/<tag>.log (always — durable inbox)
+  - notify-send desktop notification (if available; for the human user)
+
+Usage:
+    tayfa-ping <tag> "<message>"
+    tayfa-ping --from <sender> <tag> "<message>"
+    tayfa-ping --coord-dir <path> <tag> "<message>"
+
+Exit code is 0 if at least one delivery channel succeeded, 1 otherwise.
+"""
+from __future__ import annotations
+
+import argparse
+import errno
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as e:
+        return e.errno != errno.ESRCH
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Ping an awake tayfa agent.")
+    parser.add_argument("tag")
+    parser.add_argument("message")
+    parser.add_argument("--from", dest="sender", default=None,
+                        help="Sender tag (default: $TAYFA_TAG or 'system')")
+    parser.add_argument("--coord-dir", type=Path, default=None)
+    args = parser.parse_args()
+
+    tag = args.tag.lstrip("@")
+    sender = args.sender or os.environ.get("TAYFA_TAG", "system")
+    sender = sender.lstrip("@")
+
+    coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
+    if coord_dir is None:
+        print("ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
+              file=sys.stderr)
+        return 1
+
+    presence_path = coord_dir / ".presence" / f"{tag}.json"
+    pings_dir = coord_dir / ".pings"
+    pings_dir.mkdir(exist_ok=True)
+    ping_log = pings_dir / f"{tag}.log"
+
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    log_line = f"[{timestamp}] from @{sender}: {args.message}\n"
+
+    # Always: append to durable log
+    with ping_log.open("a", encoding="utf-8") as f:
+        f.write(log_line)
+    print(f"Logged to {ping_log}")
+
+    # Resolve presence
+    entry: dict | None = None
+    if presence_path.exists():
+        try:
+            entry = json.loads(presence_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            entry = None
+
+    if entry is None:
+        print(f"WARN: @{tag} is not registered. Message logged only — they'll see it next session.")
+        return 0
+
+    pid = entry.get("pid")
+    if not isinstance(pid, int) or not pid_alive(pid):
+        print(f"WARN: @{tag}'s presence is stale (PID {pid} dead). Message logged only.")
+        try:
+            presence_path.unlink()
+        except OSError:
+            pass
+        return 0
+
+    delivered: list[str] = ["log"]
+
+    # tmux send-keys if a target is recorded
+    target = entry.get("tmux_target")
+    if target and shutil.which("tmux"):
+        injected = f"[tayfa-ping from @{sender}] {args.message}"
+        try:
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, injected, "Enter"],
+                check=True,
+                capture_output=True,
+            )
+            delivered.append(f"tmux:{target}")
+        except subprocess.CalledProcessError as e:
+            print(f"WARN: tmux send-keys to {target} failed: {e.stderr.decode().strip()}",
+                  file=sys.stderr)
+
+    # Desktop notification (best-effort)
+    if shutil.which("notify-send"):
+        try:
+            subprocess.run(
+                ["notify-send", f"tayfa: @{tag}", f"from @{sender}: {args.message}"],
+                check=False,
+                capture_output=True,
+            )
+            delivered.append("notify-send")
+        except OSError:
+            pass
+
+    print(f"Delivered to @{tag} via: {', '.join(delivered)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

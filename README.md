@@ -45,13 +45,38 @@ etc., or let Claude pick the right one based on intent.
 ## CLI
 
 ```
-tayfa-inbox <tag>          # what's addressed to @tag — tasks, bugs, memos
-tayfa-inbox --coord-dir <path> <tag>   # explicit coord dir
+tayfa-inbox <tag>                       # tasks/bugs/memos addressed to @tag
+tayfa-roster                            # awake agents (PID-validated)
+tayfa-ping <tag> "<message>"            # ping an agent (tmux + log + notify)
 ```
 
-By default `tayfa-inbox` walks up from the current working directory
-looking for `dev/coordination/AGENTS.md` and uses the directory it's
-found in.
+All three walk up from the current working directory looking for
+`dev/coordination/AGENTS.md` and use the directory they find. Pass
+`--coord-dir <path>` to override.
+
+### Presence + ping
+
+Every agent that runs `/tayfa-onboard <tag>` registers itself in
+`dev/coordination/.presence/<tag>.json` (PID, tty, tmux target, start
+time). `tayfa-roster` reads that directory, validates each entry by
+`kill -0 <pid>` (and `tmux has-session` if a tmux target was
+recorded), and prunes stale ones inline. No background heartbeat
+required — when the session dies, the PID stops being valid and the
+entry is GC'd on the next roster read.
+
+`tayfa-ping <tag> "<message>"` always appends to
+`dev/coordination/.pings/<tag>.log` (the durable inbox — surfaced on
+that agent's next `tayfa-onboard`), and additionally:
+- if the recipient has a tmux target, injects the message into their
+  pane via `tmux send-keys` (real-time wake-up).
+- fires `notify-send` to your desktop if available (so you see it
+  too).
+
+Tag collisions are refused: if `@backend` is already registered with
+a live PID, a second session can't claim the same tag — pick a
+different one.
+
+`.presence/` and `.pings/` are gitignored automatically by `tayfa-init`.
 
 ## Conventions in one breath
 
