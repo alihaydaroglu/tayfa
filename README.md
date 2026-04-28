@@ -11,8 +11,7 @@ software work. Drop it into any repo and it gives you:
 - A handful of Claude Code skills that automate the scaffolding and
   the day-to-day rituals.
 
-It is the system that grew up inside the `nima` repo, lifted out so
-other projects can use it without dragging nima along.
+This package has been designed and developed in collaboration with Claude.
 
 >  **Tayfa** (_Turkish_): crew / gang — a group of people working a job together. 
 
