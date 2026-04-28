@@ -14,9 +14,7 @@ software work. Drop it into any repo and it gives you:
 It is the system that grew up inside the `nima` repo, lifted out so
 other projects can use it without dragging nima along.
 
-> **Name.** *Tayfa* is Turkish for *crew* / *gang* — the small group
-> of people working a job together. The agents (human or LLM) on a
-> project are its tayfa.
+>  **Tayfa** (_Turkish_): crew / gang — a group of people working a job together. 
 
 ## Install
 
