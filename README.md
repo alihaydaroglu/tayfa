@@ -129,9 +129,3 @@ packages/tayfa/
     ├── workstream.md.tmpl
     └── scratchboard_main.md.tmpl
 ```
-
-## Origin
-
-Lifted out of `nima/dev/coordination/` on 2026-04-23. The nima copy
-remains untouched and self-contained — tayfa is a parallel, generalised
-version that other projects can adopt without coupling.
