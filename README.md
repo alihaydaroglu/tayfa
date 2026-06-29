@@ -38,6 +38,7 @@ immediately — no re-install needed.
 | `tayfa-add-agent` | Register a new agent (`@tag`) and create their scratchboard. |
 | `tayfa-add-workstream` | Create a new workstream file from the template. |
 | `tayfa-onboard` | Fresh-context opening ritual for an agent: read the system, find the work. |
+| `tayfa-kalfa` | Become the **kalfa** (foreman / PM agent): run the crew toward a goal — stage the work, drive the loop, route + adjudicate, tee the human (**usta**) up for sign-off. Directs + verifies; never writes feature code or deploys. |
 
 Invoke from Claude Code with `/tayfa-init`, `/tayfa-onboard backend`,
 etc., or let Claude pick the right one based on intent.
@@ -124,7 +125,8 @@ packages/tayfa/
 │   ├── tayfa-init/
 │   ├── tayfa-add-agent/
 │   ├── tayfa-add-workstream/
-│   └── tayfa-onboard/
+│   ├── tayfa-onboard/
+│   └── tayfa-kalfa/       ← become the foreman / PM agent for the crew
 └── templates/          ← markdown templates copied into projects
     ├── README.md.tmpl
     ├── AGENTS.md.tmpl
