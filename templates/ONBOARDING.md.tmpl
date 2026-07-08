@@ -32,6 +32,16 @@ changed code that fits the system."
 
 ## 3. Find your work (~1 min)
 
+First register your presence (default step — plugs your session into
+pings, heartbeats, and the `tayfa-roster` liveness page; refuses if the
+tag is already taken by a live session):
+
+```
+bash ~/.claude/skills/tayfa-onboard/register_presence.sh <your_tag>
+```
+
+Then:
+
 ```
 tayfa-inbox <your_tag>
 ```
@@ -73,6 +83,7 @@ touches.
 cat dev/coordination/README.md
 cat dev/coordination/AGENTS.md
 cat {{PROJECT_DOC_PATH}}                       # REQUIRED, not optional
+bash ~/.claude/skills/tayfa-onboard/register_presence.sh <your_tag>
 tayfa-inbox <your_tag>
 cat dev/coordination/scratchboards/<your_tag>/main.md
 # ...then the workstream file and linked specs

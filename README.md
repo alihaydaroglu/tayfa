@@ -58,40 +58,64 @@ The four core skills (`tayfa-init`, `tayfa-add-agent`,
 `tayfa-add-workstream`, `tayfa-onboard`) plus the inbox CLI are all
 you need to use tayfa. Stop here if that's all you want.
 
-## Optional: presence + real-time pinging
+## Presence, beats, and the roster ("tayfa pulse")
 
-An opt-in add-on for projects that want agents to be able to ping
-each other in real time. **Ignore this section unless you actually
-want it** — the core flow above works fine without any of it.
+Presence registration is a **default step of the onboarding ritual**
+(since 2026-07-08): each agent session registers its PID in
+`dev/coordination/.presence/<tag>.json`. On top of that sit three
+tools:
 
 ```
-tayfa-roster                  # list awake agents (PID-validated)
+tayfa-roster                  # CLI: list awake agents (PID-validated)
+tayfa-roster --serve          # loopback web roster on :8533 + /roster.json
 tayfa-ping <tag> "<message>"  # tmux send-keys + log + notify
+tayfa-beat [--note "..."]     # heartbeat (usually fired by a Stop hook)
 ```
 
 How it works:
 
-- An agent opts in by running
-  `bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>` (the
-  `tayfa-onboard` skill describes this in its "Optional: enable
-  real-time pinging" section). That writes
-  `dev/coordination/.presence/<tag>.json` with the session's PID, tty,
-  and tmux target.
-- `tayfa-roster` lists everyone who has registered, validating each
-  entry by `kill -0 <pid>` (and `tmux has-session` if a tmux target
-  was recorded) and pruning stale ones inline. No background
-  heartbeat — when the session dies, the PID stops being valid.
-- `tayfa-ping <tag> "<message>"` always appends to
-  `dev/coordination/.pings/<tag>.log` (durable; surfaced on the
-  recipient's next `register_presence.sh`), and additionally
-  `tmux send-keys` if a tmux target was recorded, and `notify-send`
-  if available.
-- Tag collisions are refused: if `@backend` is registered with a live
-  PID, a second session can't claim the same tag.
+- **Registration** — `register_presence.sh <tag>` (run by the
+  `tayfa-onboard` ritual) records the session's PID, tty, and tmux
+  target. Tag collisions with a live PID are refused.
+- **Heartbeats** — install `tayfa-beat` as a **user-level Claude Code
+  Stop hook** (`~/.claude/settings.json`) and every registered session
+  writes `.presence/beats/<tag>.json` at the end of every turn — cron
+  ticks included, no model cooperation required. One hook line serves
+  every agent on the machine: tayfa-beat resolves *which* agent it is
+  at runtime by matching its PID ancestry against the registry
+  (`$TAYFA_TAG` overrides). It is strictly fail-soft: outside a tayfa
+  project or in an unregistered session it silently exits 0.
+
+  ```json
+  "hooks": { "Stop": [ { "hooks": [ { "type": "command",
+    "command": "/home/<you>/.local/bin/tayfa-beat",
+    "async": true, "timeout": 10 } ] } ] }
+  ```
+
+  Agents can additionally run `tayfa-beat --note "tick 14 — waiting on
+  review"` to publish a status line; the note persists across
+  automatic beats until replaced.
+- **The roster page** — `tayfa-roster --serve [--port 8533]` is a
+  zero-dependency loopback HTTP server: an auto-refreshing HTML table
+  plus `/roster.json` for machines (a future watchdog's input). Status
+  model: **AWAKE** (beat fresher than `--stale-after`, default 20 min),
+  **QUIET** (session alive but no fresh beat — idle, or its cron/loop
+  silently died and needs re-arming; this is the diagnostic the plain
+  PID check can't give you), **GONE** (session ended; shown greyed for
+  24 h). Optional per-project extra columns via
+  `.presence/roster.conf.json` (shell command per tag, e.g. last
+  `coord(<tag>)` commit). It binds `127.0.0.1` only — standalone in a
+  browser, or front it with whatever LAN portal/reverse proxy the
+  project already has.
+- **Pings** — `tayfa-ping <tag>` always appends to
+  `dev/coordination/.pings/<tag>.log` (durable; surfaced at the
+  recipient's next registration), plus `tmux send-keys` and
+  `notify-send` when available.
 
 The `.presence/` and `.pings/` directories are gitignored
-automatically by `tayfa-init`, so they're harmless even if you never
-use the ping system.
+automatically by `tayfa-init` (older projects: add
+`dev/coordination/.presence/` and `.pings/` to `.gitignore` — beats
+churn every turn and must never hit git).
 
 ## Conventions in one breath
 
@@ -120,7 +144,10 @@ packages/tayfa/
 ├── README.md           ← you are here
 ├── install.sh
 ├── bin/
-│   └── tayfa-inbox     ← project-agnostic inbox tool
+│   ├── tayfa-inbox     ← project-agnostic inbox tool
+│   ├── tayfa-roster    ← liveness roster (CLI + --serve web page)
+│   ├── tayfa-ping      ← real-time ping
+│   └── tayfa-beat      ← heartbeat (Stop-hook target)
 ├── skills/             ← Claude Code skills, one dir each
 │   ├── tayfa-init/
 │   ├── tayfa-add-agent/

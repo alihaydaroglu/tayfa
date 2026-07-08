@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""tayfa-beat — heartbeat for the tayfa presence registry.
+
+Writes `dev/coordination/.presence/beats/<tag>.json` (mtime = last beat).
+Designed to run as a user-level Claude Code Stop hook: it fires at the end
+of every turn, so any session registered in `.presence/` beats on every
+turn — including cron ticks — with no model cooperation required.
+
+Tag resolution, in order:
+  1. --tag
+  2. $TAYFA_TAG
+  3. walk this process's PID ancestry and match against the PIDs
+     registered in .presence/*.json (written by register_presence.sh)
+
+Fail-soft contract: this tool NEVER exits non-zero and never writes to
+stdout/stderr unless --verbose is given (or TAYFA_BEAT_DEBUG=1). A hook
+must never break or slow a session: no coord dir, unregistered session,
+unreadable /proc — all silently exit 0.
+
+Usage:
+    tayfa-beat                       # bare beat (the hook form)
+    tayfa-beat --note "tick 14 — holding on @ali gate"
+    tayfa-beat --tag backend --coord-dir <path> --verbose
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+MAX_NOTE_LEN = 200
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def ancestor_pids(limit: int = 25) -> list[int]:
+    """This process's PID chain, nearest first, up to init."""
+    chain: list[int] = []
+    pid = os.getpid()
+    for _ in range(limit):
+        chain.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        # Format: "pid (comm) state ppid ..." — comm may contain spaces
+        # and parens, so split from the LAST ')'.
+        try:
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (IndexError, ValueError):
+            break
+        if ppid <= 1:
+            break
+        pid = ppid
+    return chain
+
+
+def resolve_tag(presence_dir: Path) -> str | None:
+    env_tag = os.environ.get("TAYFA_TAG", "").lstrip("@").strip()
+    if env_tag:
+        return env_tag
+    pid_to_tag: dict[int, str] = {}
+    for path in presence_dir.glob("*.json"):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        pid = entry.get("pid")
+        tag = entry.get("tag") or path.stem
+        if isinstance(pid, int):
+            pid_to_tag[pid] = tag
+    if not pid_to_tag:
+        return None
+    for pid in ancestor_pids():
+        if pid in pid_to_tag:
+            return pid_to_tag[pid]
+    return None
+
+
+def beat(coord_dir: Path | None, tag: str | None, note: str | None) -> str:
+    coord = coord_dir or find_coord_dir(Path.cwd())
+    if coord is None:
+        return "no coord dir found — skipped"
+    presence_dir = coord / ".presence"
+    if not presence_dir.is_dir():
+        return "no .presence/ registry — skipped"
+    tag = (tag or "").lstrip("@").strip() or resolve_tag(presence_dir)
+    if not tag:
+        return "session not registered in .presence/ — skipped"
+
+    beats_dir = presence_dir / "beats"
+    beats_dir.mkdir(exist_ok=True)
+    beat_path = beats_dir / f"{tag}.json"
+
+    prev: dict = {}
+    try:
+        prev = json.loads(beat_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    data: dict = {
+        "tag": tag,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "beats": (prev.get("beats", 0) if isinstance(prev, dict) else 0) + 1,
+    }
+    # A note persists until replaced, so a status line set once stays
+    # visible on the roster through subsequent bare (hook) beats.
+    kept_note = note if note is not None else (
+        prev.get("note") if isinstance(prev, dict) else None
+    )
+    if kept_note:
+        data["note"] = str(kept_note)[:MAX_NOTE_LEN]
+
+    # Atomic replace so a concurrently-reading roster never sees a torn file.
+    fd, tmp = tempfile.mkstemp(dir=beats_dir, prefix=f".{tag}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, beat_path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return "beat write failed — skipped"
+    return f"beat #{data['beats']} for @{tag} → {beat_path}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="tayfa presence heartbeat")
+    parser.add_argument("--note", default=None, help="status line shown on the roster (persists until replaced)")
+    parser.add_argument("--tag", default=None, help="explicit agent tag (skips auto-resolution)")
+    parser.add_argument("--coord-dir", type=Path, default=None)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    verbose = args.verbose or os.environ.get("TAYFA_BEAT_DEBUG") == "1"
+    try:
+        msg = beat(args.coord_dir, args.tag, args.note)
+    except Exception as exc:  # fail-soft: a hook must never error
+        if verbose:
+            print(f"tayfa-beat: {exc}", file=sys.stderr)
+        return 0
+    if verbose:
+        print(f"tayfa-beat: {msg}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

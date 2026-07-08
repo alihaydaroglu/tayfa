@@ -38,7 +38,7 @@ done
 echo
 if [[ -d "$BIN_DST" ]]; then
     echo "Installing tayfa CLIs into $BIN_DST"
-    for tool in tayfa-inbox tayfa-roster tayfa-ping; do
+    for tool in tayfa-inbox tayfa-roster tayfa-ping tayfa-beat; do
         link_one "$BIN_SRC/$tool" "$BIN_DST/$tool"
     done
     if ! echo ":$PATH:" | grep -q ":$BIN_DST:"; then

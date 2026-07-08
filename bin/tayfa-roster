@@ -1,28 +1,47 @@
 #!/usr/bin/env python3
 """List awake agents in the current tayfa project.
 
-Reads `dev/coordination/.presence/*.json`, validates each entry's PID
-is still alive, prunes stale entries, and prints a roster.
+Reads `dev/coordination/.presence/*.json` (session registry, written by
+register_presence.sh) and `.presence/beats/<tag>.json` (heartbeats,
+written by tayfa-beat — typically from a user-level Claude Code Stop
+hook, so every registered session beats at the end of every turn).
 
 Usage:
-    tayfa-roster                          # auto-discover coord dir
+    tayfa-roster                          # one-shot CLI roster
     tayfa-roster --coord-dir <path>
     tayfa-roster --json                   # machine-readable output
+    tayfa-roster --serve [--port 8533]    # loopback web page + /roster.json
 
-Liveness check: `kill(pid, 0)`. If a tmux_target is recorded, also
-verify with `tmux has-session`. Either failing → entry deleted.
+One-shot mode keeps the original behavior: entries whose PID (or tmux
+session) is gone are pruned. Serve mode is strictly READ-ONLY — it never
+deletes registry files — and adds beat-based status:
+
+    AWAKE — pid alive, beat fresher than --stale-after (default 20 min)
+    QUIET — pid alive, beat stale or absent (idle, or its loop/cron died)
+    GONE  — pid dead; shown greyed with last-seen for 24 h, then hidden
+
+Optional extra columns: if `.presence/roster.conf.json` exists with
+    {"columns": [{"name": "last commit", "cmd": "git log ... {tag} ..."}]}
+each cmd runs per tag ({tag} substituted) in the repo root, 3 s timeout.
 """
 from __future__ import annotations
 
 import argparse
 import errno
+import html
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+GONE_VISIBLE_SECS = 24 * 3600
+DEFAULT_STALE_AFTER = 1200
+DEFAULT_PORT = 8533
 
 
 def find_coord_dir(start: Path) -> Path | None:
@@ -75,13 +94,9 @@ def is_alive(entry: dict) -> bool:
     return True
 
 
-def humanize_uptime(started_iso: str) -> str:
-    try:
-        started = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
-    except ValueError:
-        return "?"
-    delta = datetime.now(timezone.utc) - started
-    secs = int(delta.total_seconds())
+def humanize_secs(secs: int) -> str:
+    if secs < 0:
+        secs = 0
     if secs < 60:
         return f"{secs}s"
     mins = secs // 60
@@ -94,25 +109,220 @@ def humanize_uptime(started_iso: str) -> str:
     return f"{days}d {hours}h"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="List awake agents in a tayfa project.",
-    )
-    parser.add_argument("--coord-dir", type=Path, default=None)
-    parser.add_argument("--json", action="store_true", help="JSON output")
-    args = parser.parse_args()
+def humanize_uptime(started_iso: str) -> str:
+    try:
+        started = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return "?"
+    delta = datetime.now(timezone.utc) - started
+    return humanize_secs(int(delta.total_seconds()))
 
-    coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
-    if coord_dir is None:
-        print(
-            "ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
-            file=sys.stderr,
+
+# ── beat-aware roster (read-only; used by --serve and /roster.json) ──
+
+def gather_rows(coord_dir: Path, stale_after: int) -> list[dict]:
+    presence_dir = coord_dir / ".presence"
+    beats_dir = presence_dir / "beats"
+    now = time.time()
+
+    tags: dict[str, dict] = {}
+    if presence_dir.is_dir():
+        for path in sorted(presence_dir.glob("*.json")):
+            entry = load_entry(path)
+            if entry is None:
+                continue
+            tag = entry.get("tag") or path.stem
+            tags.setdefault(tag, {})["presence"] = entry
+    if beats_dir.is_dir():
+        for path in sorted(beats_dir.glob("*.json")):
+            beat = load_entry(path) or {}
+            try:
+                beat["_mtime"] = path.stat().st_mtime
+            except OSError:
+                continue
+            tags.setdefault(path.stem, {})["beat"] = beat
+
+    rows: list[dict] = []
+    for tag, parts in tags.items():
+        presence = parts.get("presence")
+        beat = parts.get("beat")
+        alive = presence is not None and is_alive(presence)
+        beat_age = int(now - beat["_mtime"]) if beat else None
+
+        if alive:
+            status = "AWAKE" if (beat_age is not None and beat_age <= stale_after) else "QUIET"
+        else:
+            if beat_age is None or beat_age > GONE_VISIBLE_SECS:
+                continue  # long gone (or no beat data at all) — drop from view
+            status = "GONE"
+
+        rows.append({
+            "tag": tag,
+            "status": status,
+            "pid": presence.get("pid") if presence else None,
+            "beat_age_s": beat_age,
+            "beats": beat.get("beats") if beat else None,
+            "note": beat.get("note") if beat else None,
+            "uptime": humanize_uptime(presence.get("started_at", "")) if alive else None,
+            "tmux_target": presence.get("tmux_target") if presence else None,
+        })
+
+    order = {"AWAKE": 0, "QUIET": 1, "GONE": 2}
+    rows.sort(key=lambda r: (order[r["status"]], r["tag"]))
+    return rows
+
+
+def load_extra_columns(coord_dir: Path) -> list[dict]:
+    conf = load_entry(coord_dir / ".presence" / "roster.conf.json")
+    if not isinstance(conf, dict):
+        return []
+    cols = conf.get("columns")
+    if not isinstance(cols, list):
+        return []
+    return [c for c in cols if isinstance(c, dict) and c.get("name") and c.get("cmd")]
+
+
+def run_extra_column(cmd: str, tag: str, repo_root: Path) -> str:
+    try:
+        out = subprocess.run(
+            cmd.replace("{tag}", tag),
+            shell=True, capture_output=True, text=True,
+            timeout=3, cwd=repo_root,
+        ).stdout.strip()
+        return out[:120] or "-"
+    except (subprocess.TimeoutExpired, OSError):
+        return "?"
+
+
+# ── web server ──
+
+STATUS_COLOR = {
+    "AWAKE": "#2da44e",
+    "QUIET": "#d4a72c",
+    "GONE": "#8b949e",
+}
+
+PAGE_TEMPLATE = """<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="20">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tayfa roster — {project}</title>
+<style>
+  :root {{ color-scheme: light dark;
+    --fg: #1f2328; --bg: #ffffff; --muted: #6a737d; --line: #d8dee4; --row: #f6f8fa; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --fg: #e6edf3; --bg: #0d1117; --muted: #8b949e; --line: #30363d; --row: #161b22; }} }}
+  body {{ margin: 2rem auto; max-width: 72rem; padding: 0 1rem;
+    font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--fg); background: var(--bg); }}
+  h1 {{ font-size: 1.1rem; }} h1 small {{ color: var(--muted); font-weight: normal; }}
+  .summary {{ color: var(--muted); margin: .3rem 0 1rem; }}
+  div.tablewrap {{ overflow-x: auto; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ text-align: left; padding: .45rem .8rem; border-bottom: 1px solid var(--line); white-space: nowrap; }}
+  th {{ color: var(--muted); font-weight: normal; }}
+  tr:nth-child(even) td {{ background: var(--row); }}
+  td.note {{ white-space: normal; max-width: 26rem; }}
+  .dot {{ display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .45rem; }}
+  tr.gone td {{ color: var(--muted); }}
+  .muted {{ color: var(--muted); }}
+  footer {{ margin-top: 1rem; color: var(--muted); font-size: .85em; }}
+  a {{ color: inherit; }}
+</style>
+</head><body>
+<h1>tayfa roster <small>— {project}</small></h1>
+<div class="summary">{summary} · refreshed {now} UTC · auto-refresh 20s</div>
+<div class="tablewrap"><table>
+<tr><th>agent</th><th>status</th><th>last beat</th><th>ticks</th><th>uptime</th><th>tmux</th><th>note</th>{extra_headers}</tr>
+{rows}
+</table></div>
+<footer>AWAKE = beat &lt; {stale}m ago · QUIET = session alive, no recent beat (idle, or its loop/cron died — re-arm?) ·
+GONE = session ended (shown 24h) · JSON: <a href="/roster.json">/roster.json</a></footer>
+</body></html>
+"""
+
+
+def render_html(coord_dir: Path, stale_after: int) -> str:
+    rows = gather_rows(coord_dir, stale_after)
+    extra_cols = load_extra_columns(coord_dir)
+    repo_root = coord_dir.parent.parent
+    project = html.escape(repo_root.name)
+
+    counts = {"AWAKE": 0, "QUIET": 0, "GONE": 0}
+    body_rows = []
+    for r in rows:
+        counts[r["status"]] += 1
+        color = STATUS_COLOR[r["status"]]
+        beat_txt = humanize_secs(r["beat_age_s"]) + " ago" if r["beat_age_s"] is not None else "never"
+        cells = [
+            f"<td>@{html.escape(r['tag'])}</td>",
+            f"<td><span class=\"dot\" style=\"background:{color}\"></span>{r['status']}</td>",
+            f"<td>{beat_txt}</td>",
+            f"<td>{r['beats'] if r['beats'] is not None else '-'}</td>",
+            f"<td>{html.escape(r['uptime'] or '-')}</td>",
+            f"<td class=\"muted\">{html.escape(r['tmux_target'] or '-')}</td>",
+            f"<td class=\"note\">{html.escape(r['note'] or '')}</td>",
+        ]
+        for col in extra_cols:
+            cells.append(f"<td class=\"muted\">{html.escape(run_extra_column(col['cmd'], r['tag'], repo_root))}</td>")
+        cls = " class=\"gone\"" if r["status"] == "GONE" else ""
+        body_rows.append(f"<tr{cls}>{''.join(cells)}</tr>")
+
+    if not body_rows:
+        body_rows.append(
+            '<tr><td colspan="9" class="muted">No registered agents. '
+            "(Sessions register via the onboarding ritual; beats come from the tayfa-beat Stop hook.)</td></tr>"
         )
-        return 1
 
+    summary = f"{counts['AWAKE']} awake · {counts['QUIET']} quiet · {counts['GONE']} gone"
+    extra_headers = "".join(f"<th>{html.escape(c['name'])}</th>" for c in extra_cols)
+    return PAGE_TEMPLATE.format(
+        project=project, summary=summary,
+        now=datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        rows="\n".join(body_rows), extra_headers=extra_headers,
+        stale=stale_after // 60,
+    )
+
+
+def serve(coord_dir: Path, bind: str, port: int, stale_after: int) -> int:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            path = self.path.split("?", 1)[0]
+            if path == "/roster.json":
+                payload = json.dumps(gather_rows(coord_dir, stale_after), indent=2).encode()
+                ctype = "application/json"
+            elif path == "/":
+                payload = render_html(coord_dir, stale_after).encode()
+                ctype = "text/html; charset=utf-8"
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):  # quiet
+            pass
+
+    server = ThreadingHTTPServer((bind, port), Handler)
+    print(f"tayfa roster serving http://{bind}:{port}/  (coord: {coord_dir})")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+# ── original one-shot CLI ──
+
+def one_shot(coord_dir: Path, as_json: bool) -> int:
     presence_dir = coord_dir / ".presence"
     if not presence_dir.is_dir():
-        if args.json:
+        if as_json:
             print("[]")
         else:
             print("No agents registered. (No .presence/ directory.)")
@@ -132,7 +342,7 @@ def main() -> int:
             continue
         awake.append((path, entry))
 
-    if args.json:
+    if as_json:
         print(json.dumps([entry for _, entry in awake], indent=2))
         return 0
 
@@ -155,6 +365,33 @@ def main() -> int:
         print()
         print(f"Pruned {len(pruned)} stale entr{'y' if len(pruned)==1 else 'ies'}: {', '.join('@'+t for t in pruned)}")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="List awake agents in a tayfa project.",
+    )
+    parser.add_argument("--coord-dir", type=Path, default=None)
+    parser.add_argument("--json", action="store_true", help="JSON output (one-shot)")
+    parser.add_argument("--serve", action="store_true", help="serve a loopback web roster")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="serve bind address (keep loopback; front with a portal/proxy for LAN)")
+    parser.add_argument("--stale-after", type=int, default=DEFAULT_STALE_AFTER,
+                        help="seconds before a live session with no fresh beat shows QUIET (default 1200)")
+    args = parser.parse_args()
+
+    coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
+    if coord_dir is None:
+        print(
+            "ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.serve:
+        return serve(coord_dir, args.bind, args.port, args.stale_after)
+    return one_shot(coord_dir, args.json)
 
 
 if __name__ == "__main__":

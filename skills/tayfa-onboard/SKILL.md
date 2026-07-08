@@ -24,25 +24,38 @@ project.
    Read **the whole file**, even if you're a bug-fix agent. You can't
    meaningfully change a system you don't understand.
 
-3. **Find your work.** Run:
+3. **Register your presence.** Run:
+   ```bash
+   bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
+   ```
+   This writes your session's PID to
+   `dev/coordination/.presence/<tag>.json`, surfaces any pings queued
+   while your tag was offline, and plugs you into the pulse system
+   (heartbeats + `tayfa-roster`; see "Presence, beats, and the roster"
+   below). If it refuses because the tag is already registered to a
+   live session, tell the user — there may be a duplicate session —
+   and continue the ritual without registering.
+
+4. **Find your work.** Run:
    ```bash
    tayfa-inbox <tag>
+   python dev/coordination/ali_ask.py check <tag>   # @ali's answers to you
    ```
    Lists open tasks, open bugs, and unresolved memos addressed to
    `@<tag>`, with file:line refs. If the inbox is empty, ask the user
    what they want you to work on — don't invent work.
 
-4. **Read your scratchboard.** Open
+5. **Read your scratchboard.** Open
    `dev/coordination/scratchboards/<tag>/main.md` (or the directory if
    the agent uses a richer memory layout). This is your private
    workspace from prior sessions — plans, half-formed thoughts, links.
 
-5. **Read the workstream file(s) the inbox pointed at.** Focus on the
+6. **Read the workstream file(s) the inbox pointed at.** Focus on the
    `## Current Sprint` section for context, then skim the other
    agents' tasks so you know what's happening around you. Skip
    historical change-log entries unless something is unclear.
 
-6. **Read the specs linked from your task.** Workstream task entries
+7. **Read the specs linked from your task.** Workstream task entries
    should link to design docs or specs — those are the design
    contract. Read the ones your work touches.
 
@@ -64,19 +77,49 @@ Then start work.
 4. If you resolved a memo addressed to you, strike its header through
    with `~~` only after **all** addressed agents have flipped to `#`.
 
-## Optional: enable real-time pinging
+## Make features reviewable (@ali standing rule, 2026-07-08)
 
-Tayfa ships an opt-in presence registry so other agents can `tayfa-ping
-<tag>` you in real time (and `tayfa-roster` to see who's awake). It is
-**not required** — tasks, memos, and the inbox work fine without it.
-Skip this section unless the user has asked for ping/roster.
+When you implement a NEW FEATURE (not a pure bug fix or refactor),
+**build @ali a visual review** — he has a short attention span and will
+not read long texts:
 
-If the user wants pinging enabled for this session, run:
+1. Host a small demo/preview page **locally** and register it on the
+   :8532 portal (the only LAN door): bind your server to `127.0.0.1`,
+   then `python dev/local/portal/register.py --slug <feature> --port
+   <port> ...` (tear down with `--unregister` when reviewed). Do NOT
+   use Claude artifacts for feature review — @ali reviews at
+   `http://<box>:8532/`.
+2. The page should SHOW the feature (screenshots, live UI, before/
+   after, gallery — whatever fits) plus a few bullet lines of what's
+   implemented. Bullets, not essays.
+3. Post the portal link in your DONE memo, **and send it to @ali's inbox**:
+   `python dev/coordination/ali_ask.py fyi --from <tag> --title "..."
+   --link /s/<slug>/`. Questions for @ali also go through `ali_ask.py ask`
+   (with `--context`); poll his answers with `ali_ask.py check <tag>`.
 
-```bash
-bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
-```
+Good exemplars: the ltx spike gallery, the KFE UI preview.
 
-This writes the session's PID to `dev/coordination/.presence/<tag>.json`
-and surfaces any pings queued in `.pings/<tag>.log` from while the tag
-was offline. Refuses if the tag is already taken by a live session.
+## Presence, beats, and the roster ("tayfa pulse")
+
+Registration (ritual step 3) plugs your session into three things:
+
+- **Pings** — other agents can `tayfa-ping <tag> "<msg>"` you in real
+  time; offline pings queue in `.pings/<tag>.log` and are surfaced at
+  your next registration.
+- **Heartbeats** — if the machine has the `tayfa-beat` Stop hook
+  installed (user-level `~/.claude/settings.json`), every registered
+  session automatically writes `.presence/beats/<tag>.json` at the end
+  of every turn, cron ticks included. No action needed from you. You
+  can also beat manually to publish a status line on the roster:
+  ```bash
+  tayfa-beat --note "tick 14 — holding on review gate"
+  ```
+  The note persists across automatic beats until you replace it —
+  keep it current at milestones; it's what the human sees at a glance.
+- **The roster** — `tayfa-roster` (CLI) or `tayfa-roster --serve
+  --port 8533` (loopback web page + `/roster.json`) shows who's AWAKE
+  (fresh beat), QUIET (session alive but no recent beat — idle, or its
+  cron/loop died and needs re-arming), or GONE (session ended).
+
+If registration was refused (tag taken by a live session), pings and
+beats for that tag belong to the other session — don't fight over it.
