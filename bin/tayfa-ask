@@ -139,6 +139,9 @@ def cmd_check(store: Path, args: argparse.Namespace) -> int:
             print(f"   A ({i['answered_at']}): {i['answer']}")
         elif i["status"] == "seen":
             print(f"   seen {i['answered_at']}")
+        if i.get("thread"):
+            print(f"   thread: {len(i['thread'])} message(s) — view: tayfa-ask thread {i['id']} · "
+                  f"reply: tayfa-ask reply {i['id']} --from {frm} --text \"...\"")
         if not i.get("acked") and i["status"] != "open":
             print(f"   ack it:  tayfa-ask ack {i['id']}")
     if open_:
@@ -146,15 +149,80 @@ def cmd_check(store: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+def locked_update(path: Path, mutate) -> dict | None:
+    """Read-modify-write an item file under an exclusive flock.
+
+    Both agents (tayfa-ask reply/ack) and the tayfa-slack daemon touch the
+    same item files; the lock prevents lost updates on the shared tree.
+    """
+    import fcntl
+    if not path.exists():
+        return None
+    with open(path, "r+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            item = json.load(f)
+            mutate(item)
+            f.seek(0)
+            f.truncate()
+            json.dump(item, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    return item
+
+
 def cmd_ack(store: Path, args: argparse.Namespace) -> int:
+    item = locked_update(store / f"{args.id}.json", lambda i: i.update(acked=True))
+    if item is None:
+        print(f"no item {args.id}", file=sys.stderr)
+        return 2
+    print(f"acked {args.id}")
+    return 0
+
+
+def cmd_reply(store: Path, args: argparse.Namespace) -> int:
+    """Append an agent-side reply to an item's thread.
+
+    The tayfa-slack daemon (if running) relays unrelayed agent entries
+    into the item's Slack thread, so this is how an agent talks back to
+    the usta after they answered/commented from Slack.
+    """
+    text = args.text or ""
+    if args.text_file:
+        text = (text + "\n\n" if text else "") + Path(args.text_file).read_text()
+    if not text.strip():
+        print("refusing: reply needs --text (or --text-file).", file=sys.stderr)
+        return 2
+    frm = args.frm.lstrip("@")
+    entry = {"from": frm, "text": text.strip(), "at": _now(), "relayed": False}
+    item = locked_update(store / f"{args.id}.json",
+                         lambda i: i.setdefault("thread", []).append(entry))
+    if item is None:
+        print(f"no item {args.id}", file=sys.stderr)
+        return 2
+    print(f"reply added to {args.id} (thread now {len(item.get('thread', []))} message(s); "
+          "the tayfa-slack daemon relays it to the usta's Slack thread)")
+    return 0
+
+
+def cmd_thread(store: Path, args: argparse.Namespace) -> int:
     p = store / f"{args.id}.json"
     if not p.exists():
         print(f"no item {args.id}", file=sys.stderr)
         return 2
-    item = json.loads(p.read_text())
-    item["acked"] = True
-    _write(store, item)
-    print(f"acked {args.id}")
+    i = json.loads(p.read_text())
+    print(f"== {i['id']}  [{i['status'].upper()}]")
+    print(f"   Q ({i.get('kind')}) @{i.get('from')}: {i.get('title')}")
+    if i.get("context"):
+        print("   context: " + i["context"].replace("\n", "\n            "))
+    if i.get("answer"):
+        print(f"   A ({i.get('answered_at', '')}): {i['answer']}")
+    for e in i.get("thread", []):
+        who = "usta" if e.get("from") == "usta" else "@" + e.get("from", "?")
+        print(f"   [{e.get('at', '')}] {who}: {e.get('text', '')}")
+    if not i.get("thread"):
+        print("   (no thread messages)")
     return 0
 
 
@@ -186,6 +254,13 @@ def main() -> int:
     a = sub.add_parser("ack")
     a.add_argument("id")
     sub.add_parser("list")
+    r = sub.add_parser("reply", help="add an agent reply to an item's thread (relayed to Slack)")
+    r.add_argument("id")
+    r.add_argument("--from", dest="frm", required=True, help="your agent tag")
+    r.add_argument("--text", default="")
+    r.add_argument("--text-file", default="")
+    t = sub.add_parser("thread", help="show an item's answer + thread")
+    t.add_argument("id")
     args = ap.parse_args()
 
     coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
@@ -197,7 +272,8 @@ def main() -> int:
 
     if args.cmd in ("ask", "fyi"):
         return cmd_create(store, args, "question" if args.cmd == "ask" else "fyi")
-    return {"check": cmd_check, "ack": cmd_ack, "list": cmd_list}[args.cmd](store, args)
+    return {"check": cmd_check, "ack": cmd_ack, "list": cmd_list,
+            "reply": cmd_reply, "thread": cmd_thread}[args.cmd](store, args)
 
 
 if __name__ == "__main__":

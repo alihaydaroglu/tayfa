@@ -48,6 +48,7 @@ etc., or let Claude pick the right one based on intent.
 ```
 tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag (incl. @all broadcasts)
 tayfa-ask <cmd>       # push questions/FYIs to the usta (the human); read answers
+tayfa-slack <cmd>     # optional Slack bridge: inbox mirror + usta<->agent convos
 ```
 
 `@all` is a broadcast address: a memo with `**To:** @all` (or a
@@ -133,6 +134,37 @@ automatically by `tayfa-init` (older projects: add
 `dev/coordination/.presence/` and `.pings/` to `.gitignore` — beats
 churn every turn and must never hit git).
 
+## Optional: the Slack bridge (`tayfa-slack`)
+
+Mirrors the usta inbox into a Slack channel and routes replies back —
+so the human can run the crew from their phone:
+
+- **Item → channel.** New `tayfa-ask` items post as channel messages.
+- **Thread reply → agent.** The human replies in the item's thread; the
+  daemon writes it back onto the item — the first reply on an open
+  question becomes its **answer** (`tayfa-ask check` picks it up), and
+  the sending agent gets a real-time `tayfa-ping` nudge.
+- **Agent reply → thread.** `tayfa-ask reply <id> --from <tag> --text
+  "..."` is relayed into the same Slack thread. Items carry a full
+  `thread` array; `tayfa-ask thread <id>` shows the conversation.
+- **Free-form convos.** Top-level channel messages route to an agent's
+  conversation log (`slack_convo/<tag>.jsonl`): a leading `@tag `
+  routes explicitly, anything else goes to `default_agent` (usually
+  the kalfa/PM). Agents read with `tayfa-slack pull <tag>` and reply
+  with `tayfa-slack send --from <tag> "..."`.
+
+Config at `dev/coordination/.slack.json` (gitignore it — it holds a
+secret; also gitignore `.slack_state.json`, `.slack_daemon.lock`,
+`slack_convo/`). Run `tayfa-slack status` to sanity-check, then
+`tayfa-slack daemon` under screen/tmux. **Mode matters:** a plain
+incoming *webhook* is SEND-ONLY (Slack returns no message ts, so thread
+replies cannot be correlated back). For the full loop provide a **bot
+token** (`xoxb-`, scopes `chat:write` + `channels:history` +
+`channels:read`; private channels need `groups:*`) and the channel id,
+and invite the bot to the channel. The daemon is a singleton per coord
+dir (flock) and polls (default 20 s) — no public endpoint or Socket
+Mode needed.
+
 ## Conventions in one breath
 
 - One coordination file per **workstream** (e.g. `webapp.md`,
@@ -164,7 +196,8 @@ packages/tayfa/
 │   ├── tayfa-roster    ← dashboard: roster + usta inbox (CLI + --serve)
 │   ├── tayfa-ask       ← usta inbox CLI (ask/fyi/check/ack/list)
 │   ├── tayfa-ping      ← real-time ping
-│   └── tayfa-beat      ← heartbeat (Stop-hook target)
+│   ├── tayfa-beat      ← heartbeat (Stop-hook target)
+│   └── tayfa-slack     ← Slack bridge (inbox mirror + convos)
 ├── skills/             ← Claude Code skills, one dir each
 │   ├── tayfa-init/
 │   ├── tayfa-add-agent/

@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""tayfa-slack — mirror the usta inbox into a Slack channel, and route
+Slack replies back to the agents. Also carries free-form conversations
+between the usta and agents (default: the kalfa/PM).
+
+Modes (set by what's in the config):
+  bot-token mode (FULL DUPLEX, recommended) — needs bot_token + channel_id.
+      New inbox items are posted with chat.postMessage (we keep the ts);
+      thread replies from the usta are polled with conversations.replies
+      and written back onto the item (first reply on an open question
+      becomes its answer, so `tayfa-ask check` sees it); agent replies
+      (`tayfa-ask reply`) are relayed into the same Slack thread;
+      top-level channel messages are routed to an agent conversation
+      (leading "@tag " routes to that agent, else default_agent).
+  webhook mode (SEND-ONLY fallback) — only webhook_url set. Items are
+      posted, but Slack does not return a ts for webhooks, so thread
+      replies CANNOT flow back. Provide a bot token for the full loop.
+
+Config: dev/coordination/.slack.json  (gitignored — holds a secret):
+  {
+    "bot_token":     "xoxb-...",            # full duplex
+    "channel_id":    "C0123456789",
+    "webhook_url":   "https://hooks.slack.com/services/...",  # send-only fallback
+    "default_agent": "pm",
+    "portal_base":   "http://<box>:8532",    # absolute links in messages
+    "poll_seconds":  20
+  }
+Bot-token scopes: chat:write, channels:history, channels:read (private
+channels: groups:history, groups:read). Invite the bot to the channel.
+
+Usage:
+  tayfa-slack status               # config + auth sanity check
+  tayfa-slack daemon               # run the mirror loop (foreground)
+  tayfa-slack send --from pm "msg" [--thread <item-id>]   # agent → channel
+  tayfa-slack pull <tag>           # unread usta convo messages for <tag>
+
+State: .slack_state.json (bootstrap timestamp, history cursor) and
+slack_convo/<tag>.jsonl + .cursor (per-agent conversation log) live next
+to the config in dev/coordination/. Items created before the first
+daemon start are not mirrored (no historical flood).
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+STORE_NAMES = ("usta_inbox", "ali_inbox")
+CONFIG_NAME = ".slack.json"
+STATE_NAME = ".slack_state.json"
+CONVO_DIR = "slack_convo"
+WATCH_CAP = 25          # most-recent open/active items polled for replies
+DEFAULT_POLL = 20
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def resolve_store(coord_dir: Path) -> Path:
+    for name in STORE_NAMES:
+        d = coord_dir / name
+        if d.is_dir():
+            return d
+    return coord_dir / STORE_NAMES[0]
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(msg: str) -> None:
+    print(f"[{now_iso()}] {msg}", flush=True)
+
+
+def load_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def locked_update(path: Path, mutate) -> dict | None:
+    if not path.exists():
+        return None
+    with open(path, "r+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            item = json.load(f)
+            mutate(item)
+            f.seek(0)
+            f.truncate()
+            json.dump(item, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    return item
+
+
+class Slack:
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.api_base = cfg.get("api_base", "https://slack.com/api").rstrip("/")
+        self.token = cfg.get("bot_token", "")
+        self.channel = cfg.get("channel_id", "")
+        self.webhook = cfg.get("webhook_url", "")
+        self.bot_user_id = ""
+
+    @property
+    def duplex(self) -> bool:
+        return bool(self.token and self.channel)
+
+    def _call(self, method: str, payload: dict | None = None, get: bool = False) -> dict:
+        if get:
+            qs = urllib.parse.urlencode(payload or {})
+            req = urllib.request.Request(f"{self.api_base}/{method}?{qs}")
+        else:
+            req = urllib.request.Request(
+                f"{self.api_base}/{method}",
+                data=json.dumps(payload or {}).encode(),
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        req.add_header("Authorization", f"Bearer {self.token}")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            out = json.loads(resp.read().decode())
+        if not out.get("ok"):
+            raise RuntimeError(f"slack {method}: {out.get('error', 'unknown error')}")
+        return out
+
+    def auth_test(self) -> dict:
+        out = self._call("auth.test", {})
+        self.bot_user_id = out.get("user_id", "")
+        return out
+
+    def post(self, text: str, thread_ts: str | None = None) -> str | None:
+        """Returns the message ts in bot mode; None in webhook mode."""
+        if self.duplex:
+            payload = {"channel": self.channel, "text": text, "unfurl_links": False}
+            if thread_ts:
+                payload["thread_ts"] = thread_ts
+            return self._call("chat.postMessage", payload)["ts"]
+        if self.webhook:
+            req = urllib.request.Request(
+                self.webhook, data=json.dumps({"text": text}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=15).read()
+            return None
+        raise RuntimeError("no bot_token+channel_id and no webhook_url configured")
+
+    def replies(self, thread_ts: str, oldest: str) -> list[dict]:
+        out = self._call("conversations.replies",
+                         {"channel": self.channel, "ts": thread_ts,
+                          "oldest": oldest, "limit": 100}, get=True)
+        return out.get("messages", [])
+
+    def history(self, oldest: str) -> list[dict]:
+        out = self._call("conversations.history",
+                         {"channel": self.channel, "oldest": oldest, "limit": 100},
+                         get=True)
+        return out.get("messages", [])
+
+
+def format_item(item: dict, portal_base: str) -> str:
+    badge = ":question:" if item.get("kind") == "question" else ":bell:"
+    lines = [f"{badge} *{item.get('title', '?')}*  — from @{item.get('from', '?')} · `{item['id']}`"]
+    if item.get("context"):
+        ctx = item["context"]
+        lines.append(">" + ctx[:1500].replace("\n", "\n>"))
+    link = item.get("link", "")
+    if link.startswith("/") and portal_base:
+        link = portal_base.rstrip("/") + link
+    if link:
+        lines.append(link)
+    if item.get("kind") == "question":
+        lines.append("_reply in this thread to answer — it flows back to the agent_")
+    return "\n".join(lines)
+
+
+def nudge(coord: Path, tag: str, text: str) -> None:
+    """Best-effort real-time nudge via tayfa-ping (durable log + tmux/notify).
+
+    --coord-dir is passed explicitly — tayfa-ping resolves from cwd
+    otherwise, which may not be the coord dir this daemon serves.
+    """
+    try:
+        subprocess.run(["tayfa-ping", "--coord-dir", str(coord),
+                        "--from", "usta(slack)", tag, text[:400]],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def convo_append(coord: Path, tag: str, entry: dict) -> None:
+    d = coord / CONVO_DIR
+    d.mkdir(exist_ok=True)
+    with open(d / f"{tag}.jsonl", "a", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
+# ─────────────────────────────── daemon ───────────────────────────────
+
+def watched_items(store: Path, started_at: str) -> list[dict]:
+    items = []
+    for p in sorted(store.glob("*.json")):
+        item = load_json(p, None)
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        if item.get("created_at", "") < started_at:
+            continue  # predates slack integration — never mirrored
+        item["_path"] = p
+        items.append(item)
+    items.sort(key=lambda i: i.get("created_at", ""), reverse=True)
+    return items
+
+
+def tick(coord: Path, store: Path, slack: Slack, state: dict) -> None:
+    portal_base = slack.cfg.get("portal_base", "")
+    watched = 0
+    for item in watched_items(store, state["started_at"]):
+        p = item.pop("_path")
+
+        # 1. new item → post to channel
+        if not item.get("slack_ts") and not item.get("slack_posted"):
+            ts = slack.post(format_item(item, portal_base))
+            locked_update(p, lambda i: i.update(slack_ts=ts or "", slack_posted=True))
+            item["slack_ts"] = ts or ""
+            log(f"posted {item['id']}" + ("" if ts else " (webhook — no reply loop)"))
+
+        if not slack.duplex or not item.get("slack_ts"):
+            continue
+
+        # 2. outbound: unrelayed agent thread entries → Slack thread
+        if any(not e.get("relayed") and e.get("from") != "usta"
+               for e in item.get("thread", [])):
+            def relay(i):
+                for e in i.get("thread", []):
+                    if not e.get("relayed") and e.get("from") != "usta":
+                        slack.post(f"@{e['from']}: {e['text']}", thread_ts=i["slack_ts"])
+                        e["relayed"] = True
+            locked_update(p, relay)
+            log(f"relayed agent replies on {item['id']}")
+
+        # 3. outbound: answer given on the dashboard → note in thread
+        if (item.get("status") in ("answered", "seen") and not item.get("answer_relayed")):
+            note = (f"_(answered on the dashboard)_ {item.get('answer', '')}"
+                    if item.get("status") == "answered" else "_(marked seen on the dashboard)_")
+            slack.post(note, thread_ts=item["slack_ts"])
+            locked_update(p, lambda i: i.update(answer_relayed=True))
+
+        # 4. inbound: usta replies in the thread → item (+ answer if open Q)
+        if watched >= WATCH_CAP:
+            continue
+        watched += 1
+        oldest = item.get("slack_last_reply_ts") or item["slack_ts"]
+        try:
+            msgs = slack.replies(item["slack_ts"], oldest)
+        except (RuntimeError, OSError) as exc:
+            log(f"replies({item['id']}): {exc}")
+            continue
+        for m in msgs:
+            if m.get("ts") in (item["slack_ts"], oldest):
+                continue
+            if m.get("user") == slack.bot_user_id or m.get("bot_id"):
+                continue
+            text = (m.get("text") or "").strip()
+            if not text:
+                continue
+
+            def absorb(i, text=text, ts=m["ts"]):
+                i.setdefault("thread", []).append(
+                    {"from": "usta", "text": text, "at": now_iso(),
+                     "relayed": True, "slack_ts": ts})
+                i["slack_last_reply_ts"] = ts
+                if i.get("kind") == "question" and i.get("status") == "open":
+                    i.update(answer=text, status="answered",
+                             answered_at=now_iso(), acked=False,
+                             answer_relayed=True)
+            locked_update(p, absorb)
+            item["slack_last_reply_ts"] = m["ts"]
+            log(f"usta replied on {item['id']}: {text[:80]}")
+            nudge(coord, item.get("from", ""),
+                  f"usta replied on {item['id']}: {text[:200]} — "
+                  f"see: tayfa-ask thread {item['id']}")
+
+    # 5. top-level channel messages → agent conversations
+    if slack.duplex:
+        try:
+            msgs = slack.history(state["last_history_ts"])
+        except (RuntimeError, OSError) as exc:
+            log(f"history: {exc}")
+            return
+        for m in sorted(msgs, key=lambda x: x.get("ts", "")):
+            state["last_history_ts"] = m["ts"]
+            if m.get("user") == slack.bot_user_id or m.get("bot_id"):
+                continue
+            if m.get("thread_ts") and m["thread_ts"] != m["ts"]:
+                continue  # thread replies handled per-item above
+            text = (m.get("text") or "").strip()
+            if not text:
+                continue
+            target = slack.cfg.get("default_agent", "pm")
+            if text.startswith("@"):
+                head, _, rest = text.partition(" ")
+                if rest.strip():
+                    target, text = head[1:], rest.strip()
+            convo_append(coord, target,
+                         {"from": "usta", "text": text, "at": now_iso(), "slack_ts": m["ts"]})
+            log(f"usta → @{target}: {text[:80]}")
+            nudge(coord, target,
+                  f"usta (slack): {text[:250]} — reply: tayfa-slack send --from {target} \"...\"")
+
+
+def cmd_daemon(coord: Path, args: argparse.Namespace) -> int:
+    cfg = load_json(coord / CONFIG_NAME, None)
+    if not cfg:
+        print(f"no config at {coord / CONFIG_NAME} — see tayfa-slack --help for the format.",
+              file=sys.stderr)
+        return 1
+    # Singleton guard: two daemons would double-post items and duplicate
+    # convo routing. The flock dies with the process, so no stale locks.
+    lock_handle = open(coord / ".slack_daemon.lock", "w")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another tayfa-slack daemon is already running for this coord dir.",
+              file=sys.stderr)
+        return 1
+    slack = Slack(cfg)
+    store = resolve_store(coord)
+    state_path = coord / STATE_NAME
+    state = load_json(state_path, {})
+    if not state.get("started_at"):
+        state = {"started_at": now_iso(), "started_ts": f"{time.time():.6f}",
+                 "last_history_ts": ""}
+    if slack.duplex:
+        who = slack.auth_test()
+        log(f"duplex mode as {who.get('user')} in {slack.channel}")
+        if not state.get("last_history_ts"):
+            # Bootstrap the history cursor from Slack's OWN latest message ts —
+            # never from local wall-clock (clock skew would drop or replay
+            # messages typed around daemon start).
+            try:
+                latest = slack._call("conversations.history",
+                                     {"channel": slack.channel, "limit": 1},
+                                     get=True).get("messages", [])
+                state["last_history_ts"] = latest[0]["ts"] if latest else "0"
+            except (RuntimeError, OSError):
+                state["last_history_ts"] = "0"
+            log(f"history cursor bootstrapped at {state['last_history_ts']}")
+    elif slack.webhook:
+        log("webhook mode — SEND-ONLY (no reply loop; provide bot_token+channel_id for full duplex)")
+    else:
+        print("config has neither bot_token+channel_id nor webhook_url", file=sys.stderr)
+        return 1
+    poll = int(cfg.get("poll_seconds", DEFAULT_POLL))
+    log(f"watching {store} every {poll}s")
+    while True:
+        try:
+            tick(coord, store, slack, state)
+        except Exception as exc:  # keep the daemon alive
+            log(f"tick error: {exc}")
+        state_path.write_text(json.dumps(state, indent=2) + "\n")
+        time.sleep(poll)
+
+
+def cmd_send(coord: Path, args: argparse.Namespace) -> int:
+    cfg = load_json(coord / CONFIG_NAME, None)
+    if not cfg:
+        print(f"no config at {coord / CONFIG_NAME}", file=sys.stderr)
+        return 1
+    slack = Slack(cfg)
+    frm = args.frm.lstrip("@")
+    if args.thread:
+        item = load_json(resolve_store(coord) / f"{args.thread}.json", None)
+        if not item or not item.get("slack_ts"):
+            print(f"item {args.thread} not found or not on Slack yet", file=sys.stderr)
+            return 2
+        slack.post(f"@{frm}: {args.text}", thread_ts=item["slack_ts"])
+    else:
+        slack.post(f"@{frm}: {args.text}")
+    convo_append(coord, frm, {"from": frm, "text": args.text, "at": now_iso()})
+    # Your own message isn't "new" to you — advance your cursor past it if
+    # you were already caught up.
+    log_path = coord / CONVO_DIR / f"{frm}.jsonl"
+    cursor_path = coord / CONVO_DIR / f"{frm}.cursor"
+    n_lines = len(log_path.read_text(encoding="utf-8").splitlines())
+    seen = int(cursor_path.read_text() or 0) if cursor_path.exists() else 0
+    if seen == n_lines - 1:
+        cursor_path.write_text(str(n_lines))
+    print("sent")
+    return 0
+
+
+def cmd_pull(coord: Path, args: argparse.Namespace) -> int:
+    tag = args.tag.lstrip("@")
+    log_path = coord / CONVO_DIR / f"{tag}.jsonl"
+    cursor_path = coord / CONVO_DIR / f"{tag}.cursor"
+    lines = log_path.read_text(encoding="utf-8").splitlines() if log_path.exists() else []
+    seen = int(cursor_path.read_text() or 0) if cursor_path.exists() else 0
+    fresh = lines[seen:]
+    if not fresh:
+        print(f"no new messages for @{tag}")
+        return 0
+    for ln in fresh:
+        e = json.loads(ln)
+        who = "usta" if e.get("from") == "usta" else "@" + e.get("from", "?")
+        print(f"[{e.get('at', '')}] {who}: {e.get('text', '')}")
+    cursor_path.write_text(str(len(lines)))
+    unanswered = fresh and json.loads(fresh[-1]).get("from") == "usta"
+    if unanswered:
+        print(f"\nreply with: tayfa-slack send --from {tag} \"...\"")
+    return 0
+
+
+def cmd_status(coord: Path, _args: argparse.Namespace) -> int:
+    cfg = load_json(coord / CONFIG_NAME, None)
+    if not cfg:
+        print(f"NOT CONFIGURED — create {coord / CONFIG_NAME} (see tayfa-slack --help)")
+        return 1
+    slack = Slack(cfg)
+    if slack.duplex:
+        try:
+            who = slack.auth_test()
+            print(f"duplex mode OK — bot {who.get('user')} ({who.get('user_id')}), "
+                  f"channel {slack.channel}")
+        except (RuntimeError, OSError) as exc:
+            print(f"bot token configured but auth FAILED: {exc}", file=sys.stderr)
+            return 1
+    elif slack.webhook:
+        print("webhook mode (SEND-ONLY) — thread replies will NOT flow back; "
+              "add bot_token + channel_id for the full loop")
+    else:
+        print("config present but no bot_token+channel_id or webhook_url", file=sys.stderr)
+        return 1
+    state = load_json(coord / STATE_NAME, {})
+    if state:
+        print(f"daemon state: started {state.get('started_at')}, "
+              f"history cursor {state.get('last_history_ts') or '(none)'}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--coord-dir", type=Path, default=None)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("daemon")
+    sub.add_parser("status")
+    s = sub.add_parser("send")
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("text")
+    s.add_argument("--thread", default="", help="item id — post into that item's Slack thread")
+    p = sub.add_parser("pull")
+    p.add_argument("tag")
+    args = ap.parse_args()
+
+    coord = args.coord_dir or find_coord_dir(Path.cwd())
+    if coord is None:
+        print("ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
+              file=sys.stderr)
+        return 1
+    return {"daemon": cmd_daemon, "send": cmd_send,
+            "pull": cmd_pull, "status": cmd_status}[args.cmd](coord, args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
