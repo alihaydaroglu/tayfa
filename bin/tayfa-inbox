@@ -17,6 +17,12 @@ ONBOARDING.md) for:
   - Memos: "### ..." sections containing "**To:** ... @<tag>" where the
     header is not struck through (~~) and the tag has not been flipped
     to # in the To: line.
+
+Broadcast: `@all` addresses every agent. A "**To:** @all" memo (or a
+"### Tasks — @all" section) lands in every inbox. To acknowledge an
+@all memo without hiding it from others, append your own `#<tag>` to
+its To: line — the memo stops showing for you once `#<your tag>`
+appears there, and is struck `~~` only when everyone relevant has.
 """
 from __future__ import annotations
 
@@ -85,8 +91,8 @@ def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, i
         lines = f.read_text(encoding="utf-8").splitlines()
 
         for header, body, header_line in iter_sections(lines):
-            is_task_section = header.startswith(f"Tasks — {tag_at}")
-            is_bug_section = header.startswith(f"Bugs — {tag_at}")
+            is_task_section = header.startswith(f"Tasks — {tag_at}") or header.startswith("Tasks — @all")
+            is_bug_section = header.startswith(f"Bugs — {tag_at}") or header.startswith("Bugs — @all")
             bucket = (
                 open_tasks if is_task_section
                 else open_bugs if is_bug_section
@@ -105,7 +111,7 @@ def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, i
             acknowledged = False
             for _line_no, line in body:
                 if line.startswith("**To:**"):
-                    if tag_at in line:
+                    if tag_at in line or "@all" in line:
                         addressed = True
                     if tag_hash in line:
                         acknowledged = True

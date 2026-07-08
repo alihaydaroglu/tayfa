@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""The usta's inbox — agents push questions/FYIs to the human; the human
+answers on the web (tayfa-roster --serve → /inbox) or by editing the item
+files directly.
+
+"Usta" is tayfa's name for the human the crew works for. Items are
+one-JSON-file-each under `dev/coordination/usta_inbox/` so concurrent
+agents never clobber each other on a shared tree. (Projects that predate
+the tayfa lift may have the store at `ali_inbox/` — tayfa-ask finds and
+uses that automatically.)
+
+Usage:
+  ask  — a question that needs the usta's answer (ALWAYS include context;
+         they read on the web, not in your memo):
+      tayfa-ask ask --from backend \
+          --title "full_access exempt from consent gate?" \
+          --context "Shipped default gates full_access. One-tuple flip if not." \
+          [--context-file notes.md] [--link /s/myspike/]
+
+  fyi  — something for the usta to look at (REQUIRED whenever you publish
+         a spike report / review page — send the link through here):
+      tayfa-ask fyi --from frontend \
+          --title "FEAT-11 viewing page demo" --link /s/feat07a-legal/ \
+          [--context "2-line summary"]
+
+  check — see the usta's answers to YOUR items (run it whenever you check
+          your inbox). Unacked answers only; ack what you've absorbed:
+      tayfa-ask check backend [--all]
+      tayfa-ask ack <id>
+
+  list — everything still waiting on the usta (any agent may look):
+      tayfa-ask list
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+STORE_NAMES = ("usta_inbox", "ali_inbox")  # legacy fallback second
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def resolve_store(coord_dir: Path) -> Path:
+    """Existing store wins (legacy ali_inbox/ included); else usta_inbox/."""
+    for name in STORE_NAMES:
+        d = coord_dir / name
+        if d.is_dir():
+            return d
+    return coord_dir / STORE_NAMES[0]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _slug(text: str, n: int = 28) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:n] or "item"
+
+
+def _load_all(store: Path) -> list[dict]:
+    items = []
+    for p in sorted(store.glob("*.json")):
+        try:
+            items.append(json.loads(p.read_text()))
+        except (json.JSONDecodeError, OSError):
+            print(f"warning: unreadable item {p.name}", file=sys.stderr)
+    return items
+
+
+def _write(store: Path, item: dict) -> Path:
+    store.mkdir(exist_ok=True)
+    p = store / f"{item['id']}.json"
+    p.write_text(json.dumps(item, indent=2, ensure_ascii=False) + "\n")
+    return p
+
+
+def cmd_create(store: Path, args: argparse.Namespace, kind: str) -> int:
+    context = args.context or ""
+    if args.context_file:
+        context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
+    if kind == "question" and not context.strip():
+        print("refusing: questions need --context (or --context-file) — the usta reads "
+              "the context on the web page, not your memo.", file=sys.stderr)
+        return 2
+    if kind == "fyi" and not args.link:
+        print("refusing: fyi needs --link (that's its whole point).", file=sys.stderr)
+        return 2
+    frm = args.frm.lstrip("@")
+    item = {
+        "id": f"{frm}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{_slug(args.title)}",
+        "from": frm,
+        "kind": kind,
+        "title": args.title,
+        "context": context.strip(),
+        "link": args.link or "",
+        "created_at": _now(),
+        "status": "open",          # open -> answered (question) / seen (fyi)
+        "answer": "",
+        "answered_at": "",
+        "acked": False,            # set by the asking agent once it read the answer
+    }
+    p = _write(store, item)
+    print(f"created {item['id']}  ({p})")
+    print(f"the usta will see it on the dashboard /inbox — check answers with: tayfa-ask check {frm}")
+    return 0
+
+
+def cmd_check(store: Path, args: argparse.Namespace) -> int:
+    frm = args.frm.lstrip("@")
+    mine = [i for i in _load_all(store) if i["from"] == frm]
+    if not mine:
+        print(f"no inbox items from @{frm}")
+        return 0
+    answered = [i for i in mine if i["status"] in ("answered", "seen") and not i.get("acked")]
+    open_ = [i for i in mine if i["status"] == "open"]
+    shown = mine if args.all else answered
+    if not shown and not args.all:
+        print(f"no NEW answers for @{frm}"
+              + (f" ({len(open_)} still open with the usta)" if open_ else ""))
+        return 0
+    for i in shown:
+        print(f"\n== {i['id']}  [{i['status'].upper()}{' /acked' if i.get('acked') else ''}]")
+        print(f"   Q ({i['kind']}): {i['title']}")
+        if i["status"] == "answered":
+            print(f"   A ({i['answered_at']}): {i['answer']}")
+        elif i["status"] == "seen":
+            print(f"   seen {i['answered_at']}")
+        if not i.get("acked") and i["status"] != "open":
+            print(f"   ack it:  tayfa-ask ack {i['id']}")
+    if open_:
+        print(f"\n({len(open_)} still open with the usta: " + ", ".join(i["id"] for i in open_) + ")")
+    return 0
+
+
+def cmd_ack(store: Path, args: argparse.Namespace) -> int:
+    p = store / f"{args.id}.json"
+    if not p.exists():
+        print(f"no item {args.id}", file=sys.stderr)
+        return 2
+    item = json.loads(p.read_text())
+    item["acked"] = True
+    _write(store, item)
+    print(f"acked {args.id}")
+    return 0
+
+
+def cmd_list(store: Path, _args: argparse.Namespace) -> int:
+    open_ = [i for i in _load_all(store) if i["status"] == "open"]
+    if not open_:
+        print("nothing waiting on the usta")
+        return 0
+    for i in sorted(open_, key=lambda x: x["created_at"]):
+        print(f"{i['created_at']}  {i['kind']:8s} @{i['from']:12s} {i['id']}\n    {i['title']}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--coord-dir", type=Path, default=None)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for kind in ("ask", "fyi"):
+        s = sub.add_parser(kind)
+        s.add_argument("--from", dest="frm", required=True, help="your agent tag")
+        s.add_argument("--title", required=True)
+        s.add_argument("--context", default="")
+        s.add_argument("--context-file", default="")
+        s.add_argument("--link", default="", help="e.g. /s/<slug>/ on the project's portal")
+    c = sub.add_parser("check")
+    c.add_argument("frm", help="your agent tag")
+    c.add_argument("--all", action="store_true")
+    a = sub.add_parser("ack")
+    a.add_argument("id")
+    sub.add_parser("list")
+    args = ap.parse_args()
+
+    coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
+    if coord_dir is None:
+        print("ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
+              file=sys.stderr)
+        return 1
+    store = resolve_store(coord_dir)
+
+    if args.cmd in ("ask", "fyi"):
+        return cmd_create(store, args, "question" if args.cmd == "ask" else "fyi")
+    return {"check": cmd_check, "ack": cmd_ack, "list": cmd_list}[args.cmd](store, args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -39,7 +39,7 @@ project.
 4. **Find your work.** Run:
    ```bash
    tayfa-inbox <tag>
-   python dev/coordination/ali_ask.py check <tag>   # @ali's answers to you
+   tayfa-ask check <tag>    # the usta's (human's) answers to your questions
    ```
    Lists open tasks, open bugs, and unresolved memos addressed to
    `@<tag>`, with file:line refs. If the inbox is empty, ask the user
@@ -92,10 +92,11 @@ not read long texts:
 2. The page should SHOW the feature (screenshots, live UI, before/
    after, gallery — whatever fits) plus a few bullet lines of what's
    implemented. Bullets, not essays.
-3. Post the portal link in your DONE memo, **and send it to @ali's inbox**:
-   `python dev/coordination/ali_ask.py fyi --from <tag> --title "..."
-   --link /s/<slug>/`. Questions for @ali also go through `ali_ask.py ask`
-   (with `--context`); poll his answers with `ali_ask.py check <tag>`.
+3. Post the portal link in your DONE memo, **and send it to the usta's
+   inbox**: `tayfa-ask fyi --from <tag> --title "..." --link /s/<slug>/`.
+   Questions for the human also go through `tayfa-ask ask` (with
+   `--context`); poll answers with `tayfa-ask check <tag>`. The human
+   answers on the dashboard (`tayfa-roster --serve` → `/inbox`).
 
 Good exemplars: the ltx spike gallery, the KFE UI preview.
 

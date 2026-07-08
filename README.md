@@ -46,13 +46,25 @@ etc., or let Claude pick the right one based on intent.
 ## CLI — core
 
 ```
-tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag
+tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag (incl. @all broadcasts)
+tayfa-ask <cmd>       # push questions/FYIs to the usta (the human); read answers
 ```
+
+`@all` is a broadcast address: a memo with `**To:** @all` (or a
+`### Tasks — @all` section) lands in **every** agent's inbox. An agent
+acks an @all memo for itself by appending its own `#<tag>` to the To:
+line; the memo is struck `~~` only when everyone relevant has acked.
 
 That's the whole essential surface area. `tayfa-inbox` walks up from
 the current working directory looking for
 `dev/coordination/AGENTS.md` and uses the directory it finds. Pass
 `--coord-dir <path>` to override.
+
+The usta inbox (`tayfa-ask` — ask/fyi/check/ack/list) stores items
+one-JSON-file-each under `dev/coordination/usta_inbox/` (legacy
+`ali_inbox/` is auto-detected), so concurrent agents never clobber each
+other; the human answers on the dashboard's `/inbox` page (below) and
+answers flow back by item id.
 
 The four core skills (`tayfa-init`, `tayfa-add-agent`,
 `tayfa-add-workstream`, `tayfa-onboard`) plus the inbox CLI are all
@@ -95,9 +107,13 @@ How it works:
   Agents can additionally run `tayfa-beat --note "tick 14 — waiting on
   review"` to publish a status line; the note persists across
   automatic beats until replaced.
-- **The roster page** — `tayfa-roster --serve [--port 8533]` is a
-  zero-dependency loopback HTTP server: an auto-refreshing HTML table
-  plus `/roster.json` for machines (a future watchdog's input). Status
+- **The dashboard** — `tayfa-roster --serve [--port 8533]` is a
+  zero-dependency loopback HTTP server with two pages: `/` (the roster,
+  auto-refreshing) and `/inbox` (the **usta inbox** — the human answers
+  agents' `tayfa-ask` questions right on the page, marks FYIs seen).
+  `/roster.json` + `/inbox.json` serve machines (a future watchdog's
+  input). All intra-page URLs are relative, so it works standalone or
+  behind a reverse-proxy prefix (e.g. a project portal at `/s/roster/`). Status
   model: **AWAKE** (beat fresher than `--stale-after`, default 20 min),
   **QUIET** (session alive but no fresh beat — idle, or its cron/loop
   silently died and needs re-arming; this is the diagnostic the plain
@@ -145,7 +161,8 @@ packages/tayfa/
 ├── install.sh
 ├── bin/
 │   ├── tayfa-inbox     ← project-agnostic inbox tool
-│   ├── tayfa-roster    ← liveness roster (CLI + --serve web page)
+│   ├── tayfa-roster    ← dashboard: roster + usta inbox (CLI + --serve)
+│   ├── tayfa-ask       ← usta inbox CLI (ask/fyi/check/ack/list)
 │   ├── tayfa-ping      ← real-time ping
 │   └── tayfa-beat      ← heartbeat (Stop-hook target)
 ├── skills/             ← Claude Code skills, one dir each
