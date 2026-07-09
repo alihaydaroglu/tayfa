@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""tayfa-compact — PreCompact/PostCompact hook target: make context
+compaction survivable for tayfa agents.
+
+Installed as user-level Claude Code hooks:
+
+    "PreCompact":  [{"hooks": [{"type": "command",
+                    "command": "/path/to/tayfa-compact --pre",  "timeout": 10}]}]
+    "PostCompact": [{"hooks": [{"type": "command",
+                    "command": "/path/to/tayfa-compact --post", "timeout": 10}]}]
+
+--pre   Injects summarizer guidance: preserve the agent tag, in-flight
+        work, armed crons/wakeups (which DIE on compaction), unpushed
+        state. Points at the parachute file.
+--post  Injects the re-entry ritual into the fresh context: read
+        scratchboards/<tag>/inflight.md, re-arm crons, check inbox,
+        beat, rewrite the parachute (= the auto-clear).
+
+The parachute convention: each agent keeps
+dev/coordination/scratchboards/<tag>/inflight.md CURRENT while working
+(in-flight items + next steps, an "## armed" section listing every
+cron/wakeup with interval + prompt, and who they're waiting on). After
+compaction the ritual has the agent rewrite it fresh, so it never goes
+stale across cycles.
+
+Fail-soft like tayfa-beat: outside a tayfa project, or in an
+unregistered session, emits nothing and exits 0 — a hook must never
+break a session. Tag resolution: $TAYFA_TAG, else PID-ancestry match
+against .presence/*.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def find_coord_dir(start: Path) -> Path | None:
+    cur = start.resolve()
+    while True:
+        candidate = cur / "dev" / "coordination" / "AGENTS.md"
+        if candidate.is_file():
+            return candidate.parent
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def ancestor_pids(limit: int = 25) -> list[int]:
+    chain: list[int] = []
+    pid = os.getpid()
+    for _ in range(limit):
+        chain.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        try:
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (IndexError, ValueError):
+            break
+        if ppid <= 1:
+            break
+        pid = ppid
+    return chain
+
+
+def read_hook_stdin() -> dict:
+    """Hook invocations pipe a JSON payload (incl. session_id); CLI runs
+    have a tty or empty stdin. Never block, never fail."""
+    try:
+        if sys.stdin.isatty():
+            return {}
+        data = sys.stdin.read()
+        return json.loads(data) if data.strip() else {}
+    except Exception:
+        return {}
+
+
+def _claude_ancestor_pid() -> int | None:
+    """Nearest ancestor whose comm is the claude binary (for healing)."""
+    for pid in ancestor_pids():
+        try:
+            if Path(f"/proc/{pid}/comm").read_text().strip() == "claude":
+                return pid
+        except OSError:
+            continue
+    return None
+
+
+def resolve_tag(presence_dir: Path, session_id: str = "") -> str | None:
+    """$TAYFA_TAG → PID ancestry → session_id, self-healing the registry.
+
+    Host processes can be respawned mid-session (observed under the
+    VSCode extension: the claude binary gets a new PID between turns),
+    which silently breaks PID-anchored presence. Hooks receive the
+    stable session_id on stdin, so: a PID match backfills session_id
+    into the entry, and a session_id match (when the PID match fails)
+    heals the entry's stale pid to the current claude ancestor.
+    """
+    env_tag = os.environ.get("TAYFA_TAG", "").lstrip("@").strip()
+    if env_tag:
+        return env_tag
+    entries: list[tuple[Path, dict]] = []
+    for path in presence_dir.glob("*.json"):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(entry, dict):
+            entries.append((path, entry))
+    if not entries:
+        return None
+
+    chain = ancestor_pids()
+    by_pid = {e.get("pid"): (p, e) for p, e in entries if isinstance(e.get("pid"), int)}
+    for pid in chain:
+        if pid in by_pid:
+            path, entry = by_pid[pid]
+            if session_id and entry.get("session_id") != session_id:
+                entry["session_id"] = session_id
+                try:
+                    path.write_text(json.dumps(entry, indent=2) + "\n")
+                except OSError:
+                    pass
+            return entry.get("tag") or path.stem
+
+    if session_id:
+        for path, entry in entries:
+            if entry.get("session_id") == session_id:
+                healed = _claude_ancestor_pid()
+                if healed:
+                    entry["pid"] = healed
+                    entry["comm"] = "claude"
+                    try:
+                        path.write_text(json.dumps(entry, indent=2) + "\n")
+                    except OSError:
+                        pass
+                return entry.get("tag") or path.stem
+    return None
+
+
+def emit(event: str, text: str) -> None:
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": event, "additionalContext": text}}))
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    stdin = read_hook_stdin()
+    try:
+        coord = find_coord_dir(Path.cwd())
+        if coord is None or mode not in ("--pre", "--post"):
+            return 0
+        tag = resolve_tag(coord / ".presence", str(stdin.get("session_id") or "")) or "<your tag — check dev/coordination/.presence/>"
+        board = f"dev/coordination/scratchboards/{tag}/inflight.md"
+
+        if mode == "--pre":
+            trigger = stdin.get("trigger", "auto")
+            emit("PreCompact", (
+                f"CONTEXT COMPACTION IS ABOUT TO RUN ({trigger}). You are tayfa agent "
+                f"@{tag}. The summary MUST preserve, verbatim and specifically: "
+                "(1) your agent tag and current task; "
+                "(2) every in-flight item and its exact next step; "
+                "(3) every armed cron/scheduled wakeup (interval + prompt) — these DO NOT "
+                "survive compaction and must be re-armed afterwards; "
+                "(4) uncommitted files, unpushed commits, running background processes; "
+                "(5) who/what you are waiting on. "
+                f"Your parachute file {board} should already hold this state — anything "
+                "in it takes precedence over a vaguer summary."))
+        else:
+            emit("PostCompact", (
+                f"You just resumed from context compaction as tayfa agent @{tag}. "
+                "Before continuing your task, run this re-entry ritual: "
+                f"(1) Read {board} — your pre-compaction in-flight state; trust it over "
+                "the summary where they disagree. "
+                "(2) Crons and scheduled wakeups DID NOT survive compaction: check "
+                "CronList, then re-arm everything listed in the file's '## armed' "
+                "section. "
+                f"(3) Run `tayfa-inbox {tag}` and `tayfa-ask check {tag}` for anything "
+                "that arrived meanwhile. "
+                f"(4) Update your heartbeat note: `tayfa-beat --note \"...\"`. "
+                f"(5) Rewrite {board} fresh — keep only still-true items (this is the "
+                "between-compactions clear). Then continue where you left off."))
+    except Exception:  # fail-soft: hooks must never break a session
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

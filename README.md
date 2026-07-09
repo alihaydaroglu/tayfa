@@ -124,6 +124,22 @@ How it works:
   `coord(<tag>)` commit). It binds `127.0.0.1` only — standalone in a
   browser, or front it with whatever LAN portal/reverse proxy the
   project already has.
+- **Compaction survival** — a parachute file
+  (`scratchboards/<tag>/inflight.md`, kept current while working: in-flight
+  items, an `## armed` list of crons/wakeups, waiting-ons) plus two
+  user-level hooks running `tayfa-compact`: **PreCompact** injects
+  preserve-this-state guidance for the summarizer; **PostCompact** injects
+  the re-entry ritual (read the parachute, re-arm crons — they die on
+  compaction — check inbox, rewrite the parachute fresh). Both hooks
+  self-heal the presence registry via session_id when a harness respawns
+  the host process mid-session (stale-PID fix, shared with tayfa-beat).
+
+  ```json
+  "PreCompact":  [ { "hooks": [ { "type": "command",
+    "command": "/home/<you>/.local/bin/tayfa-compact --pre",  "timeout": 10 } ] } ],
+  "PostCompact": [ { "hooks": [ { "type": "command",
+    "command": "/home/<you>/.local/bin/tayfa-compact --post", "timeout": 10 } ] } ]
+  ```
 - **Pings** — `tayfa-ping <tag>` always appends to
   `dev/coordination/.pings/<tag>.log` (durable; surfaced at the
   recipient's next registration), plus `tmux send-keys` and
@@ -197,6 +213,7 @@ packages/tayfa/
 │   ├── tayfa-ask       ← usta inbox CLI (ask/fyi/check/ack/list)
 │   ├── tayfa-ping      ← real-time ping
 │   ├── tayfa-beat      ← heartbeat (Stop-hook target)
+│   ├── tayfa-compact   ← compaction parachute (Pre/PostCompact hook target)
 │   └── tayfa-slack     ← Slack bridge (inbox mirror + convos)
 ├── skills/             ← Claude Code skills, one dir each
 │   ├── tayfa-init/

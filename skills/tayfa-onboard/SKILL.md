@@ -124,3 +124,25 @@ Registration (ritual step 3) plugs your session into three things:
 
 If registration was refused (tag taken by a live session), pings and
 beats for that tag belong to the other session — don't fight over it.
+
+## Surviving compaction (the parachute)
+
+Context compaction wipes armed crons/wakeups and can blur in-flight
+detail. Tayfa handles this with a **parachute file** plus two user-level
+hooks (`tayfa-compact --pre/--post` on PreCompact/PostCompact):
+
+- Keep `dev/coordination/scratchboards/<tag>/inflight.md` **current
+  while you work** — don't wait for a compaction warning. Sections:
+  `## in flight` (items + exact next step), `## armed` (every cron /
+  scheduled wakeup with interval + prompt — these DIE on compaction),
+  `## waiting on`, `## unpushed / uncommitted`.
+- The PreCompact hook tells the summarizer to preserve that state; the
+  PostCompact hook injects your re-entry ritual: read inflight.md
+  (trust it over the summary), CronList + **re-arm everything under
+  `## armed`**, run your inbox + `tayfa-ask check`, update your beat
+  note, then **rewrite inflight.md fresh** — that rewrite is the
+  between-compactions clear.
+- If your session's host process gets respawned (new PID — happens
+  under some harnesses), the beat/compact hooks self-heal your
+  presence entry via session_id. If you ever find yourself
+  unregistered, just re-run step 3.
