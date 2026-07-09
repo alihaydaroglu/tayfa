@@ -70,7 +70,12 @@ def read_hook_stdin() -> dict:
     """Hook invocations pipe a JSON payload (incl. session_id); CLI runs
     have a tty or empty stdin. Never block, never fail."""
     try:
+        import select
         if sys.stdin.isatty():
+            return {}
+        # Only read if data is actually ready — an open-but-silent stdin
+        # (e.g. an inherited pipe) would block a bare read() forever.
+        if not select.select([sys.stdin], [], [], 0.25)[0]:
             return {}
         data = sys.stdin.read()
         return json.loads(data) if data.strip() else {}
