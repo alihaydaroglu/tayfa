@@ -143,6 +143,29 @@ hooks (`tayfa-compact --pre/--post` on PreCompact/PostCompact):
   note, then **rewrite inflight.md fresh** — that rewrite is the
   between-compactions clear.
 - If your session's host process gets respawned (new PID — happens
-  under some harnesses), the beat/compact hooks self-heal your
-  presence entry via session_id. If you ever find yourself
-  unregistered, just re-run step 3.
+  under some harnesses), your beats silently stop: re-run step 3 to
+  re-register (it replaces entries whose pid is dead). Hooks NEVER
+  write the registry.
+
+## Duplicate sessions (forks) — the do-not-fight protocol
+
+Harnesses can end up running TWO copies of one agent — a second window
+resuming the same session, or a forked host process. Both copies have
+the same memory and will try to do the same work. If you suspect a
+duplicate (registration refused with a live pid; work you didn't do
+appearing under your tag; your files changing under you):
+
+1. **STOP claiming the identity.** Do not overwrite the presence entry,
+   do not re-register over a live pid, do not "prove" you're the
+   original from the presence file — either copy can have written it.
+2. **NEVER kill another session's host process.** You cannot reliably
+   tell which copy is which from inside (PIDs lie across respawns, and
+   forks share the session id); killing hosts is the human's call —
+   they close the extra window.
+3. **Freeze side effects** (disarm your loop, no pushes/merges/deploys)
+   and surface it to the human (`tayfa-ask ask` / chat) with the
+   evidence: both pids, `ps -o lstart= -p <pid>` start times, what
+   collided. Then wait.
+4. If you must know which copy is older, process **start time** is the
+   only tiebreak either copy can't forge — but use it to REPORT, not to
+   act.

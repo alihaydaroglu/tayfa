@@ -25,8 +25,10 @@ stale across cycles.
 
 Fail-soft like tayfa-beat: outside a tayfa project, or in an
 unregistered session, emits nothing and exits 0 — a hook must never
-break a session. Tag resolution: $TAYFA_TAG, else PID-ancestry match
-against .presence/*.json.
+break a session. Tag resolution: $TAYFA_TAG, else a strictly READ-ONLY
+PID-ancestry match against .presence/*.json (hooks never write the
+registry — the session_id self-heal was removed 2026-07-10; see
+resolve_tag docstring).
 """
 from __future__ import annotations
 
@@ -83,66 +85,34 @@ def read_hook_stdin() -> dict:
         return {}
 
 
-def _claude_ancestor_pid() -> int | None:
-    """Nearest ancestor whose comm is the claude binary (for healing)."""
-    for pid in ancestor_pids():
-        try:
-            if Path(f"/proc/{pid}/comm").read_text().strip() == "claude":
-                return pid
-        except OSError:
-            continue
-    return None
+def resolve_tag(presence_dir: Path) -> str | None:
+    """$TAYFA_TAG, else a strictly READ-ONLY PID-ancestry match.
 
-
-def resolve_tag(presence_dir: Path, session_id: str = "") -> str | None:
-    """$TAYFA_TAG → PID ancestry → session_id, self-healing the registry.
-
-    Host processes can be respawned mid-session (observed under the
-    VSCode extension: the claude binary gets a new PID between turns),
-    which silently breaks PID-anchored presence. Hooks receive the
-    stable session_id on stdin, so: a PID match backfills session_id
-    into the entry, and a session_id match (when the PID match fails)
-    heals the entry's stale pid to the current claude ancestor.
+    An earlier version "self-healed" registry entries using the hook
+    payload's session_id. REMOVED 2026-07-10: harnesses can run two
+    FORKS of one session, and forks share the session_id — healing let
+    both copies claim the same tag and fight over the entry, corrupting
+    the one identity signal agents had. Hooks must NEVER write to the
+    registry. If your pid changed, re-register (register_presence.sh
+    replaces entries whose pid is dead). If registration is refused, a
+    live session owns the tag: do NOT overwrite it, do NOT kill the
+    other process — surface the duplicate to the human and stop.
     """
     env_tag = os.environ.get("TAYFA_TAG", "").lstrip("@").strip()
     if env_tag:
         return env_tag
-    entries: list[tuple[Path, dict]] = []
+    pid_to_tag: dict[int, str] = {}
     for path in presence_dir.glob("*.json"):
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        if isinstance(entry, dict):
-            entries.append((path, entry))
-    if not entries:
-        return None
-
-    chain = ancestor_pids()
-    by_pid = {e.get("pid"): (p, e) for p, e in entries if isinstance(e.get("pid"), int)}
-    for pid in chain:
-        if pid in by_pid:
-            path, entry = by_pid[pid]
-            if session_id and entry.get("session_id") != session_id:
-                entry["session_id"] = session_id
-                try:
-                    path.write_text(json.dumps(entry, indent=2) + "\n")
-                except OSError:
-                    pass
-            return entry.get("tag") or path.stem
-
-    if session_id:
-        for path, entry in entries:
-            if entry.get("session_id") == session_id:
-                healed = _claude_ancestor_pid()
-                if healed:
-                    entry["pid"] = healed
-                    entry["comm"] = "claude"
-                    try:
-                        path.write_text(json.dumps(entry, indent=2) + "\n")
-                    except OSError:
-                        pass
-                return entry.get("tag") or path.stem
+        pid = entry.get("pid")
+        if isinstance(pid, int):
+            pid_to_tag[pid] = entry.get("tag") or path.stem
+    for pid in ancestor_pids():
+        if pid in pid_to_tag:
+            return pid_to_tag[pid]
     return None
 
 
@@ -158,7 +128,7 @@ def main() -> int:
         coord = find_coord_dir(Path.cwd())
         if coord is None or mode not in ("--pre", "--post"):
             return 0
-        tag = resolve_tag(coord / ".presence", str(stdin.get("session_id") or "")) or "<your tag — check dev/coordination/.presence/>"
+        tag = resolve_tag(coord / ".presence") or "<your tag — check dev/coordination/.presence/>"
         board = f"dev/coordination/scratchboards/{tag}/inflight.md"
 
         if mode == "--pre":
