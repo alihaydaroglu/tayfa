@@ -4,16 +4,26 @@
 # Called by the tayfa-onboard skill as the first step of the ritual.
 # Refuses if <tag> is already registered with a live PID.
 #
-# Usage: register_presence.sh <tag>
+# Usage: register_presence.sh <tag> [--session-id <id>]
+#
+# Pass --session-id with your Claude Code session uuid (the last path
+# component of your scratchpad directory) — PID-anchored identity breaks
+# whenever the harness respawns the host process (constant under the
+# VSCode extension), and the session id is the stable anchor the beat /
+# compaction hooks fall back to (read-only).
 
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: register_presence.sh <tag>" >&2
+if [[ $# -lt 1 ]]; then
+    echo "Usage: register_presence.sh <tag> [--session-id <id>]" >&2
     exit 1
 fi
 
 TAG="${1#@}"
+SESSION_ID_ARG=""
+if [[ "${2:-}" == "--session-id" && -n "${3:-}" ]]; then
+    SESSION_ID_ARG="$3"
+fi
 
 if [[ ! "$TAG" =~ ^[a-zA-Z0-9_]+$ ]]; then
     echo "ERROR: tag must be alphanumeric + underscores (got: $TAG)" >&2
@@ -101,7 +111,7 @@ if [[ -n "${TMUX:-}" ]]; then
     # session_name:window_index.pane_index
     TMUX_TARGET="$(tmux display-message -p '#S:#I.#P' 2>/dev/null || echo)"
 fi
-SESSION_ID="${CLAUDE_SESSION_ID:-}"
+SESSION_ID="${SESSION_ID_ARG:-${CLAUDE_SESSION_ID:-}}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 CWD="$(pwd)"
 

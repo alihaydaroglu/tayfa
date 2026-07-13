@@ -26,8 +26,14 @@ project.
 
 3. **Register your presence.** Run:
    ```bash
-   bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag>
+   bash ${CLAUDE_SKILL_DIR}/register_presence.sh <tag> --session-id <your-session-uuid>
    ```
+   Your session uuid is the last path component of the scratchpad
+   directory named in your system prompt. Passing it matters: some
+   harnesses (VSCode extension) respawn the host process constantly, so
+   PID-anchored identity goes stale within minutes — the session id is
+   the stable anchor your heartbeats fall back to (read-only; nothing
+   ever rewrites the registry).
    This writes your session's PID to
    `dev/coordination/.presence/<tag>.json`, surfaces any pings queued
    while your tag was offline, and plugs you into the pulse system

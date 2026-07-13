@@ -150,8 +150,13 @@ def gather_rows(coord_dir: Path, stale_after: int) -> list[dict]:
         alive = presence is not None and is_alive(presence)
         beat_age = int(now - beat["_mtime"]) if beat else None
 
-        if alive:
-            status = "AWAKE" if (beat_age is not None and beat_age <= stale_after) else "QUIET"
+        # A fresh beat outranks the pid: some harnesses respawn the host
+        # process constantly, so a dead registered pid does NOT mean a dead
+        # session — but a beat can only come from a live one.
+        if beat_age is not None and beat_age <= stale_after:
+            status = "AWAKE"
+        elif alive:
+            status = "QUIET"
         else:
             if beat_age is None or beat_age > GONE_VISIBLE_SECS:
                 continue  # long gone (or no beat data at all) — drop from view
@@ -498,9 +503,20 @@ def one_shot(coord_dir: Path, as_json: bool) -> int:
     awake: list[tuple[Path, dict]] = []
     pruned: list[str] = []
 
+    import time as _time
     for path in sorted(presence_dir.glob("*.json")):
         entry = load_entry(path)
         if entry is None or not is_alive(entry):
+            # Fresh beat = live session with a churned pid — keep the entry
+            # (session_id resolution still works off it).
+            beat_file = presence_dir / "beats" / path.name
+            try:
+                fresh = _time.time() - beat_file.stat().st_mtime <= DEFAULT_STALE_AFTER
+            except OSError:
+                fresh = False
+            if entry is not None and fresh:
+                awake.append((path, entry))
+                continue
             try:
                 path.unlink()
                 pruned.append(path.stem)
