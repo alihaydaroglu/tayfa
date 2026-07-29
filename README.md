@@ -11,12 +11,9 @@ software work. Drop it into any repo and it gives you:
 - A handful of Claude Code skills that automate the scaffolding and
   the day-to-day rituals.
 
-It is the system that grew up inside the `nima` repo, lifted out so
-other projects can use it without dragging nima along.
+This package has been designed and developed in collaboration with Claude.
 
-> **Name.** *Tayfa* is Turkish for *crew* / *gang* — the small group
-> of people working a job together. The agents (human or LLM) on a
-> project are its tayfa.
+>  **Tayfa** (_Turkish_): crew / gang — a group of people working a job together. 
 
 ## Install
 
@@ -228,9 +225,3 @@ packages/tayfa/
     ├── workstream.md.tmpl
     └── scratchboard_main.md.tmpl
 ```
-
-## Origin
-
-Lifted out of `nima/dev/coordination/` on 2026-04-23. The nima copy
-remains untouched and self-contained — tayfa is a parallel, generalised
-version that other projects can adopt without coupling.
