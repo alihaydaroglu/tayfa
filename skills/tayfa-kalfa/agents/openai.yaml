@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tayfa Kalfa"
+  short_description: "Coordinate a multi-agent Codex effort"
+  default_prompt: "Use $tayfa-kalfa to coordinate this workstream toward its agreed definition of done."

@@ -11,6 +11,17 @@ for the list.
 |-----|------|--------------|-----------|
 | _(none yet — `tayfa-add-agent <tag>` to register one)_ | | | |
 
+## Codex repository guidance
+
+<!-- Fill these in during tayfa-init. Keep this section concise. -->
+
+- Architecture / overview: `{{PROJECT_DOC_PATH}}`
+- Build command: TODO
+- Test command: TODO
+- Required verification: TODO
+- Protected or out-of-scope paths: TODO
+- Additional repository conventions: TODO
+
 ## Conventions
 
 ### Finding your work
@@ -66,7 +77,6 @@ A task in stream A that needs help from stream B:
 
 ## Agent model choice
 
-Agents may be human, LLM, or hybrid. The coordination system doesn't
-care — what matters is that each `@tag` corresponds to one "mind" that
-picks up and completes tasks. Specialist agents are typically LLM-driven
-and spin up for specific scopes, then retire when their work is done.
+Agents may be human, Codex tasks, or hybrid. The coordination system does not
+care; each `@tag` identifies one owner that picks up and completes tasks. Do
+not assign the same tag to concurrent active tasks.

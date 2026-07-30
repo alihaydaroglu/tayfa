@@ -1,43 +1,25 @@
 ---
 name: tayfa-add-agent
-description: Register a new agent in a tayfa-managed coordination directory. Use when adding a new agent (@tag) to an existing dev/coordination/ — creates their scratchboard at scratchboards/<tag>/main.md. The user must then add a row to AGENTS.md describing the agent's role, scratchboard path, and active workstreams.
+description: Register a new agent tag in an existing Tayfa coordination directory and create its private scratchboard. Use when assigning a new Codex task or agent a stable Tayfa identity and workstream ownership.
 ---
 
-# tayfa-add-agent
+# Add a Tayfa agent
 
-Register a new agent (`@<tag>`) in the project's coordination dir.
+Obtain the bare tag, one-line role, and active workstreams. Ask the user only
+when these cannot be inferred safely.
 
-## Inputs
+1. Run `bash <this-skill-directory>/add_agent.sh <tag>`, resolving the skill
+   directory to the folder containing this `SKILL.md`.
+2. Add this row under `## Agents` in `dev/coordination/AGENTS.md`:
 
-- The agent's tag (the bare word, no leading `@`). Examples: `backend`,
-  `design`, `move_system`, `dynamicrafter`.
-- A one-line role description (you'll need this for the AGENTS.md row).
-- The list of workstreams the agent will be active in (file names from
-  `dev/coordination/*.md` minus README/AGENTS/ONBOARDING).
-
-If you don't have these yet, ask the user before running the script.
-
-## Steps
-
-1. **Run the helper.** Creates the scratchboard skeleton at
-   `dev/coordination/scratchboards/<tag>/main.md`. Refuses if the
-   directory already exists.
-   ```bash
-   bash ${CLAUDE_SKILL_DIR}/add_agent.sh <tag>
+   ```text
+   | @<tag> | <role> | [<tag>/main.md](scratchboards/<tag>/main.md) | <streams> |
    ```
 
-2. **Add a row to `dev/coordination/AGENTS.md`** under the `## Agents`
-   table. The format is:
-   ```
-   | @<tag> | <role description> | [<tag>/main.md](scratchboards/<tag>/main.md) | <workstream1>, <workstream2> |
-   ```
-   If the table still has the placeholder row (`_(none yet — ...)_`),
-   replace it with the new agent's row instead of adding a second row.
+   Replace the placeholder row when adding the first agent.
+3. Add the agent to each active workstream. Create a
+   `### Tasks — @<tag>` section only when it has assigned work.
+4. Report the new identity and tell the user to start or steer a Codex task
+   with `$tayfa-onboard` and that tag.
 
-3. **Wire the agent into the workstream files** they're active in: add
-   a `### Tasks — @<tag>` section under `## Current Sprint` if they
-   have open work, or just mention them in the workstream's "Agents
-   active in this stream" line so other agents know they exist.
-
-4. **Confirm to the user** what was created and what they should do next
-   (typically: spin up the new agent and have it read ONBOARDING.md).
+Never reuse a tag concurrently for two active tasks.

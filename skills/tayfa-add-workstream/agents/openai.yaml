@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Tayfa Workstream"
+  short_description: "Open a coordinated line of work"
+  default_prompt: "Use $tayfa-add-workstream to create and initialize a new coordinated workstream."

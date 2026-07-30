@@ -25,23 +25,12 @@ cp "$TEMPLATES/README.md.tmpl"     "$DEST/README.md"
 cp "$TEMPLATES/AGENTS.md.tmpl"     "$DEST/AGENTS.md"
 cp "$TEMPLATES/ONBOARDING.md.tmpl" "$DEST/ONBOARDING.md"
 
-# Pre-emptive .gitignore for the optional ping system. Patterns are
-# harmless if .presence/ and .pings/ never get created — git just
-# ignores nonexistent matches.
-cat > "$DEST/.gitignore" <<'GITIGNORE'
-# Local-only state from tayfa's optional ping system (created on demand
-# by register_presence.sh / tayfa-ping). Per-machine, per-session.
-.presence/
-.pings/
-GITIGNORE
-
 echo "Scaffolded:"
 echo "  $DEST/README.md"
 echo "  $DEST/AGENTS.md"
 echo "  $DEST/ONBOARDING.md"
 echo "  $DEST/scratchboards/"
-echo "  $DEST/.gitignore"
 echo
 echo "Placeholders to fill in:"
 echo "  {{PROJECT_NAME}}     — README.md, AGENTS.md"
-echo "  {{PROJECT_DOC_PATH}} — ONBOARDING.md"
+echo "  {{PROJECT_DOC_PATH}} — ONBOARDING.md, AGENTS.md"

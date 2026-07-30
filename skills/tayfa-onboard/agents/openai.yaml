@@ -1,0 +1,4 @@
+interface:
+  display_name: "Onboard into Tayfa"
+  short_description: "Restore context and find assigned work"
+  default_prompt: "Use $tayfa-onboard to onboard under my assigned tag and begin the highest-priority work."

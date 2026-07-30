@@ -1,0 +1,4 @@
+interface:
+  display_name: "Initialize Tayfa"
+  short_description: "Set up Codex multi-agent coordination"
+  default_prompt: "Use $tayfa-init to set up durable multi-agent coordination in this repository."

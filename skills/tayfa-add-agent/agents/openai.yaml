@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Tayfa Agent"
+  short_description: "Register a tagged Codex agent owner"
+  default_prompt: "Use $tayfa-add-agent to register a new agent and assign its workstreams."
