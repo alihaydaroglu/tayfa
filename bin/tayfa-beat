@@ -177,6 +177,14 @@ def beat(coord_dir: Path | None, tag: str | None, note: str | None,
     # Atomic replace so a concurrently-reading roster never sees a torn file.
     fd, tmp = tempfile.mkstemp(dir=beats_dir, prefix=f".{tag}.", suffix=".tmp")
     try:
+        # mkstemp hardcodes 0600 and os.replace PRESERVES the tmp file's
+        # mode, so a beat lands unreadable to every other unix user.
+        # Neither umask nor a directory ACL can widen it — the create
+        # mode masks both. On a shared checkout with two users that
+        # silently broke the roster: kim's agents beat correctly and
+        # simply never appeared, because ali-side `tayfa-roster` could
+        # not READ their files. Beats are shared state; say so.
+        os.fchmod(fd, 0o664)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, beat_path)
