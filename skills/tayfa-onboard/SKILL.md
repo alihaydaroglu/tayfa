@@ -15,9 +15,19 @@ Do these steps in order. Each one is short — the whole thing is ~15
 minutes of reading. Don't skip steps even if you think you know the
 project.
 
-1. **Know the system.** Read `dev/coordination/README.md` and
-   `dev/coordination/AGENTS.md`. You'll learn the workstream layout,
-   the agent registry, and the `@tag` / `#tag` / `~~` conventions.
+0. **What is true right now.** If the project keeps a
+   `dev/coordination/STATE.md`, read it FIRST and read all of it: one
+   page, rewritten never appended, describing what is deployed and which
+   traps are live. Then your surface's page at
+   `dev/coordination/state/<tag>.md` if it has one. Nothing else in the
+   directory is safe to trust that way: **the workstream boards are a
+   LOG, not a briefing.** Search them for history; never read one to get
+   oriented.
+
+1. **Know the system.** Read `dev/coordination/README.md` for the layout
+   and the `@tag` / `#tag` / `~~` conventions. `AGENTS.md` is a registry:
+   **grep it for your tag**, and read its Conventions section, but do not
+   read the roster end to end.
 
 2. **Understand the project.** Read the project's main architecture
    doc — `dev/coordination/ONBOARDING.md` names it under step 2.
@@ -48,18 +58,43 @@ project.
    tayfa-ask check <tag>    # the usta's (human's) answers to your questions
    ```
    Lists open tasks, open bugs, and unresolved memos addressed to
-   `@<tag>`, with file:line refs. If the inbox is empty, ask the user
-   what they want you to work on — don't invent work.
+   `@<tag>`, with file:line refs.
 
-5. **Read your scratchboard.** Open
-   `dev/coordination/scratchboards/<tag>/main.md` (or the directory if
-   the agent uses a richer memory layout). This is your private
-   workspace from prior sessions — plans, half-formed thoughts, links.
+   By default this lists only **live** work: memos on boards with no
+   commit in 14 days are counted in a `── HISTORY ──` footer instead of
+   listed, and each section is capped at 40. `--all` (or `--limit 0`,
+   `--stale-days 0`) brings the full record back. If the inbox is empty,
+   ask the user what they want you to work on — don't invent work.
 
-6. **Read the workstream file(s) the inbox pointed at.** Focus on the
-   `## Current Sprint` section for context, then skim the other
-   agents' tasks so you know what's happening around you. Skip
-   historical change-log entries unless something is unclear.
+5. **Read your scratchboard — the top of it.** Read
+   `dev/coordination/scratchboards/<tag>/inflight.md` in full (it is
+   short and it is current), then the **head** of
+   `scratchboards/<tag>/main.md`:
+
+   ```bash
+   sed -n '1,/^<!-- archive -->/p' scratchboards/<tag>/main.md   # or:
+   head -200 scratchboards/<tag>/main.md
+   ```
+
+   A long-lived agent's `main.md` runs to tens of thousands of words of
+   dead history — reading it whole is the single most expensive thing in
+   this ritual. **Keep the live part at the top** and push finished work
+   below an `<!-- archive -->` line (or into `scratchboards/<tag>/archive/`).
+   Grep the archive when you need it; never read it to get oriented.
+
+6. **Read your items on the workstream file(s) — never the file.**
+   Boards run to 100k+ words. **Do not `cat`, Read or skim a board.**
+   Open only the `file:line` refs your inbox gave you, plus the
+   `## Current Sprint` section:
+
+   ```bash
+   sed -n '<line>,+40p' dev/coordination/<board>.md      # one inbox ref
+   awk '/^## Current Sprint/,/^## /' dev/coordination/<board>.md
+   ```
+
+   Everything else on the board is a change log. Search it (`grep -n`)
+   when you need history; reading it to get oriented is the mistake this
+   step exists to prevent.
 
 7. **Read the specs linked from your task.** Workstream task entries
    should link to design docs or specs — those are the design

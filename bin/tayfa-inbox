@@ -47,6 +47,68 @@ def find_coord_dir(start: Path) -> Path | None:
         cur = cur.parent
 
 
+# ── Dormant-board filtering ─────────────────────────────────────────────
+#
+# Boards are append-only and memos are only struck (`~~`) once EVERY
+# addressed agent flips to `#`. In practice nobody flips, so a long-lived
+# tag accumulates every memo it was ever cc'd on: measured 2026-09-02 on
+# nima, @pm's inbox was 1,082 memos / 16k words — 22k tokens of two-month-
+# old headers read at the top of every fresh context.
+#
+# A board that has not been committed to in `--stale-days` is dormant: its
+# memos are history, not work. They are counted and named in a footer, never
+# silently dropped, and `--all` brings them back.
+
+DEFAULT_STALE_DAYS = 14
+DEFAULT_LIMIT = 40
+
+
+def board_ages(coord_dir: Path, files: list[Path]) -> dict[str, float]:
+    """{filename: fractional days since it last changed}. Falls back to mtime, then to 0.
+
+    Fails OPEN: any file we cannot date is treated as fresh (age 0) so a
+    broken git or a brand-new untracked board never hides real work.
+    """
+    import subprocess
+    import time
+
+    ages: dict[str, float] = {}
+    now = time.time()
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(coord_dir), "log", "--format=%ct", "--name-only", "--", "."],
+            capture_output=True, text=True, timeout=20, check=True,
+        ).stdout
+        stamp = None
+        prefix = None
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.isdigit() and len(line) >= 9:
+                stamp = int(line)
+                continue
+            if stamp is None:
+                continue
+            name = Path(line).name
+            if prefix is None:
+                prefix = line[: len(line) - len(name)]
+            # first (newest) commit touching this path wins
+            ages.setdefault(name, (now - stamp) / 86400.0)
+    except Exception:
+        pass
+
+    # A file edited on disk is fresh no matter when it was last committed:
+    # take the YOUNGER of (last commit, mtime). Without this, a brand-new
+    # memo appended to a dormant board is invisible until someone commits it.
+    for f in files:
+        try:
+            mtime_age = (now - f.stat().st_mtime) / 86400.0
+        except OSError:
+            mtime_age = 0.0
+        ages[f.name] = min(ages.get(f.name, mtime_age), mtime_age)
+    return ages
+
 def iter_sections(lines: list[str]):
     """Yield (header_text, section_body_lines, header_line_no) for each ### section."""
     header_re = re.compile(r"^### (.+)")
@@ -132,6 +194,25 @@ def main() -> int:
         default=None,
         help="Path to the coordination directory (default: walk up from cwd looking for dev/coordination/AGENTS.md)",
     )
+    parser.add_argument(
+        "--stale-days",
+        type=int,
+        default=DEFAULT_STALE_DAYS,
+        metavar="N",
+        help=f"Hide memos on boards with no commit in N days (default: {DEFAULT_STALE_DAYS}). 0 disables.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        metavar="N",
+        help=f"Max items shown per section (default: {DEFAULT_LIMIT}). 0 for no limit.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Show everything: no staleness filter, no per-section limit.",
+    )
     args = parser.parse_args()
 
     tag = args.tag.lstrip("@")
@@ -153,6 +234,23 @@ def main() -> int:
     files = sorted(f for f in coord_dir.glob("*.md") if f.name not in SKIP_FILES)
     results = find_open_items(tag, files)
 
+    stale_days = 0 if args.all else max(0, args.stale_days)
+    limit = 0 if args.all else max(0, args.limit)
+
+    hidden_memos: list[tuple[Path, int, str]] = []
+    if stale_days or limit:
+        ages = board_ages(coord_dir, files)
+        # Freshest board first, and within a board the LAST-appended memo
+        # first (boards are append-only, so a higher line number is newer).
+        # Without this the per-section cap buries brand-new memos.
+        results["memos"].sort(key=lambda it: (ages.get(it[0].name, 0.0), -it[1]))
+        if stale_days:
+            fresh, dormant = [], []
+            for item in results["memos"]:
+                (dormant if ages.get(item[0].name, 0.0) >= stale_days else fresh).append(item)
+            results["memos"] = fresh
+            hidden_memos = dormant
+
     width = 60
     print("=" * width)
     print(f"  INBOX for @{tag}")
@@ -172,14 +270,32 @@ def main() -> int:
         if not items:
             print("  (none)")
         else:
-            for f, line_no, text in items:
+            shown = items[:limit] if limit else items
+            for f, line_no, text in shown:
                 rel = f.name
                 display = text if len(text) <= 90 else text[:87] + "..."
                 print(f"  {rel}:{line_no}  {display}")
+            if len(items) > len(shown):
+                print(
+                    f"  … {len(items) - len(shown)} more not shown "
+                    f"(tayfa-inbox --limit 0 {tag})"
+                )
+        print()
+
+    if hidden_memos:
+        boards = sorted({f.name for f, _, _ in hidden_memos})
+        head = ", ".join(boards[:6]) + (f", +{len(boards) - 6} more" if len(boards) > 6 else "")
+        print(
+            f"── HISTORY ──\n"
+            f"  {len(hidden_memos)} older memo(s) on {len(boards)} dormant board(s) "
+            f"(no commit in {stale_days}+ days) are not listed:\n"
+            f"    {head}\n"
+            f"  These are a record, not work. To see them: tayfa-inbox --all {tag}"
+        )
         print()
 
     if total == 0:
-        print("Inbox zero. You're clear.")
+        print("Inbox zero. You're clear." if not hidden_memos else "Nothing live. You're clear.")
     else:
         print(f"Total open items: {total}")
     return 0
