@@ -15,6 +15,26 @@ This package has been designed and developed in collaboration with Claude.
 
 >  **Tayfa** (_Turkish_): crew / gang — a group of people working a job together. 
 
+## How you use it
+
+Ask Claude to install this package in the directory you work in.
+
+Whenever you're working on a long-running task, run `/tayfa-add-agent` to create a new
+persistent agent. For example, `/tayfa-add-agent allen-human-dataset` — that agent's job
+is to download that specific dataset, write the wrappers for it, and analyse it.
+
+As that agent works, it saves salient information in a scratchboard in the coordination
+directory. Every agent has its own scratchboard, and the coordination directory is where
+all the agent-related files live.
+
+Whenever you open a new Claude window, type `/tayfa-onboard allen-human-dataset` and it
+loads the relevant information from the scratchboard, so it knows what you were doing.
+
+Agents talk to each other by sending memos. You can tell your `allen-human-dataset` agent
+something like *"tell the `allen-mouse-dataset` agent that we should be using log2cpm
+normalization for all RNAseq data"* — and when you next load up the `allen-mouse-dataset`
+agent (or if it's currently active), it will receive that message.
+
 ## Install
 
 ```bash
