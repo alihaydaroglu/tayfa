@@ -134,12 +134,17 @@ PYEOF
 
 echo "Registered @$TAG → PID $SESSION_PID ($SESSION_COMM) at $PRESENCE_FILE"
 
-# Surface any pings logged while this tag was offline.
+# Show the pings that arrived since this tag last read, and mark them read.
+# The log is permanent history; tayfa-ping --unread keeps a cursor beside it
+# and caps what it prints. Never let a ping problem fail the registration.
 PING_LOG="$COORD_DIR/.pings/$TAG.log"
 if [[ -s "$PING_LOG" ]]; then
+    PING_TOOL="$(dirname "$(readlink -f "$0")")/../../bin/tayfa-ping"
+    [[ -x "$PING_TOOL" ]] || PING_TOOL="$(command -v tayfa-ping || true)"
     echo
-    echo "── Pings waiting for you in $PING_LOG ──"
-    cat "$PING_LOG"
-    echo "──"
-    echo "(Move or truncate the log once you've handled them.)"
+    if [[ -z "$PING_TOOL" ]] || ! "$PING_TOOL" --unread "$TAG" --coord-dir "$COORD_DIR"; then
+        echo "── newest pings in $PING_LOG (tayfa-ping --unread unavailable) ──"
+        tail -c 12000 "$PING_LOG" || true
+        echo "──"
+    fi
 fi

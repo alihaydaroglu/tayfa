@@ -1,30 +1,49 @@
 #!/usr/bin/env python3
-"""Ping an awake agent in the current tayfa project.
+"""Ping an awake agent in the current tayfa project, or read your own pings.
 
-Looks up the agent's presence record and delivers the message via every
-available channel:
+Sending looks up the agent's presence record and delivers the message via
+every available channel:
   - tmux send-keys (if presence has a tmux_target)
-  - append to dev/coordination/.pings/<tag>.log (always — durable inbox)
+  - append to dev/coordination/.pings/<tag>.log (always — durable history)
   - notify-send desktop notification (if available; for the human user)
+
+Reading (--unread) shows the pings that arrived since the tag last read,
+then marks them read. The log is never rewritten: a byte-offset cursor in
+.pings/<tag>.cursor records how far the tag has read. Under a harness with
+no tmux target (VSCode), nothing pushes a ping into a live session, so
+--unread is how an agent receives pings mid-session.
 
 Usage:
     tayfa-ping <tag> "<message>"
     tayfa-ping --from <sender> <tag> "<message>"
     tayfa-ping --coord-dir <path> <tag> "<message>"
+    tayfa-ping --unread <tag>            # new pings since last read, then mark read
+    tayfa-ping --unread --peek <tag>     # show them without marking read
 
-Exit code is 0 if at least one delivery channel succeeded, 1 otherwise.
+--unread keeps the newest pings within --limit (default 20) and
+--max-chars (default 12000); older unread pings are counted, marked read,
+and the sed command to read them is printed. 0 disables either cap.
+
+Exit code is 0 if at least one delivery channel succeeded (send) or the
+read completed (--unread), 1 otherwise.
 """
 from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# A ping record starts at a line like "[2026-09-10T07:04:00+00:00] from @pm: ".
+# Messages may span lines; continuation lines belong to the record above.
+PING_HEAD = re.compile(r"^\[\d{4}-\d{2}-\d{2}T[^\]\n]*\] from @", re.M)
 
 
 def find_coord_dir(start: Path) -> Path | None:
@@ -50,24 +69,148 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def _parse_cursor(text: str) -> int:
+    try:
+        return max(0, int(text.strip() or 0))
+    except ValueError:
+        return 0
+
+
+def read_unread(coord_dir: Path, tag: str, limit: int, max_chars: int, peek: bool) -> int:
+    pings_dir = coord_dir / ".pings"
+    ping_log = pings_dir / f"{tag}.log"
+    cursor_path = pings_dir / f"{tag}.cursor"
+
+    if not ping_log.is_file() or ping_log.stat().st_size == 0:
+        print(f"no unread pings for @{tag}")
+        return 0
+
+    # The cursor file doubles as the lock, so two readers of one tag never
+    # both show the same pings. A cursor we cannot write (another unix user's
+    # tag, read-only checkout) degrades to --peek rather than failing.
+    cur_f = None
+    if not peek:
+        try:
+            cur_f = open(cursor_path, "a+", encoding="ascii")
+            fcntl.flock(cur_f, fcntl.LOCK_EX)
+        except OSError as e:
+            print(f"WARN: cannot write {cursor_path} ({e.strerror}); "
+                  "showing pings without marking them read.", file=sys.stderr)
+            cur_f = None
+            peek = True
+    try:
+        if cur_f is not None:
+            cur_f.seek(0)
+            start = _parse_cursor(cur_f.read())
+        else:
+            try:
+                start = _parse_cursor(cursor_path.read_text(encoding="ascii"))
+            except (OSError, UnicodeDecodeError):
+                start = 0
+
+        # Shared lock: senders hold LOCK_EX while appending, so we never read
+        # half a ping.
+        with ping_log.open("rb") as lf:
+            fcntl.flock(lf, fcntl.LOCK_SH)
+            buf = lf.read()
+
+        reset = start > len(buf)  # log was truncated or replaced since last read
+        if reset:
+            start = 0
+        chunk = buf[start:]
+        nl = chunk.rfind(b"\n")
+        if nl < 0:
+            print(f"no unread pings for @{tag}")
+            return 0
+        end = start + nl + 1
+        text = chunk[: nl + 1].decode("utf-8", errors="replace")
+
+        heads = [m.start() for m in PING_HEAD.finditer(text)]
+        if not heads or heads[0] != 0:
+            heads.insert(0, 0)  # cursor landed mid-record, or pre-format lines
+        records = [text[a:b] for a, b in zip(heads, heads[1:] + [len(text)])]
+        records = [r for r in records if r.strip()]
+
+        if not records:
+            print(f"no unread pings for @{tag}")
+        else:
+            shown: list[str] = []
+            used = 0
+            for rec in reversed(records):
+                if limit > 0 and len(shown) >= limit:
+                    break
+                if shown and max_chars > 0 and used + len(rec) > max_chars:
+                    break
+                if not shown and max_chars > 0 and len(rec) > max_chars:
+                    rec = rec[:max_chars].rstrip("\n") + "\n… [truncated; full text is in the log]\n"
+                shown.append(rec)
+                used += len(rec)
+            shown.reverse()
+            skipped = len(records) - len(shown)
+
+            print(f"── {len(records)} unread ping(s) for @{tag} ──")
+            if reset:
+                print("(the log was truncated since the last read; reading it from the start)")
+            if skipped:
+                first_line = buf[:start].count(b"\n") + 1
+                last_line = first_line + sum(r.count("\n") for r in records[:skipped]) - 1
+                print(f"({skipped} older unread ping(s) not shown: "
+                      f"sed -n '{first_line},{last_line}p' {ping_log})")
+            sys.stdout.write("".join(shown))
+            print("── " + ("peek: NOT marked read" if peek else "marked read") + " ──")
+
+        if cur_f is not None:
+            cur_f.seek(0)
+            cur_f.truncate()
+            cur_f.write(str(end))
+            cur_f.flush()
+            os.fsync(cur_f.fileno())
+        return 0
+    finally:
+        if cur_f is not None:
+            cur_f.close()
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ping an awake tayfa agent.")
+    parser = argparse.ArgumentParser(description="Ping an awake tayfa agent, or read your pings.")
     parser.add_argument("tag")
-    parser.add_argument("message")
+    parser.add_argument("message", nargs="?")
     parser.add_argument("--from", dest="sender", default=None,
                         help="Sender tag (default: $TAYFA_TAG or 'system')")
     parser.add_argument("--coord-dir", type=Path, default=None)
+    parser.add_argument("--unread", action="store_true",
+                        help="Show pings that arrived since <tag> last read, then mark them read")
+    parser.add_argument("--peek", action="store_true",
+                        help="With --unread: show without marking read")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="With --unread: most pings to show (0 = no cap)")
+    parser.add_argument("--max-chars", type=int, default=12000,
+                        help="With --unread: most characters to show (0 = no cap)")
     args = parser.parse_args()
 
     tag = args.tag.lstrip("@")
-    sender = args.sender or os.environ.get("TAYFA_TAG", "system")
-    sender = sender.lstrip("@")
+    if args.unread:
+        if args.message is not None:
+            parser.error("--unread takes a tag, not a message")
+        if not re.fullmatch(r"[A-Za-z0-9_]+", tag):
+            parser.error(f"tag must be alphanumeric + underscores (got: {tag})")
+    else:
+        if args.message is None:
+            parser.error("a message is required (or pass --unread to read pings)")
+        if args.peek:
+            parser.error("--peek only applies with --unread")
 
     coord_dir = args.coord_dir or find_coord_dir(Path.cwd())
     if coord_dir is None:
         print("ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
               file=sys.stderr)
         return 1
+
+    if args.unread:
+        return read_unread(coord_dir, tag, args.limit, args.max_chars, args.peek)
+
+    sender = args.sender or os.environ.get("TAYFA_TAG", "system")
+    sender = sender.lstrip("@")
 
     presence_path = coord_dir / ".presence" / f"{tag}.json"
     pings_dir = coord_dir / ".pings"
@@ -77,9 +220,11 @@ def main() -> int:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     log_line = f"[{timestamp}] from @{sender}: {args.message}\n"
 
-    # Always: append to durable log
+    # Always: append to durable log (LOCK_EX pairs with --unread's LOCK_SH)
     with ping_log.open("a", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         f.write(log_line)
+        f.flush()
     print(f"Logged to {ping_log}")
 
     # Resolve presence

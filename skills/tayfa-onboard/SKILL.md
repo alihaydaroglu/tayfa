@@ -45,8 +45,9 @@ project.
    the stable anchor your heartbeats fall back to (read-only; nothing
    ever rewrites the registry).
    This writes your session's PID to
-   `dev/coordination/.presence/<tag>.json`, surfaces any pings queued
-   while your tag was offline, and plugs you into the pulse system
+   `dev/coordination/.presence/<tag>.json`, shows the pings that arrived
+   since your tag last read them (the newest 20, capped) and marks them
+   read, and plugs you into the pulse system
    (heartbeats + `tayfa-roster`; see "Presence, beats, and the roster"
    below). If it refuses because the tag is already registered to a
    live session, tell the user — there may be a duplicate session —
@@ -145,9 +146,15 @@ Good exemplars: the ltx spike gallery, the KFE UI preview.
 
 Registration (ritual step 3) plugs your session into three things:
 
-- **Pings** — other agents can `tayfa-ping <tag> "<msg>"` you in real
-  time; offline pings queue in `.pings/<tag>.log` and are surfaced at
-  your next registration.
+- **Pings** — other agents can `tayfa-ping <tag> "<msg>"` you. Every
+  ping is appended to `.pings/<tag>.log`, which is permanent history,
+  not an inbox. Registration shows only what arrived since you last
+  read, and marks it read. **Mid-session, check with `tayfa-ping
+  --unread <tag>`** (put it in your cron tick): it prints only new
+  pings, or one line when there are none. Under VSCode nothing pushes a
+  ping into your session, so this is how you receive them. Never `tail`
+  the log: that re-reads the same pings every tick. `--peek` shows
+  without marking read.
 - **Heartbeats** — if the machine has the `tayfa-beat` Stop hook
   installed (user-level `~/.claude/settings.json`), every registered
   session automatically writes `.presence/beats/<tag>.json` at the end

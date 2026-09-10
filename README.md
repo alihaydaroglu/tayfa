@@ -79,6 +79,7 @@ tools:
 tayfa-roster                  # CLI: list awake agents (PID-validated)
 tayfa-roster --serve          # loopback web roster on :8533 + /roster.json
 tayfa-ping <tag> "<message>"  # tmux send-keys + log + notify
+tayfa-ping --unread <tag>     # pings since you last read, then mark read
 tayfa-beat [--note "..."]     # heartbeat (usually fired by a Stop hook)
 ```
 
@@ -138,9 +139,15 @@ How it works:
     "command": "/home/<you>/.local/bin/tayfa-compact --post", "timeout": 10 } ] } ]
   ```
 - **Pings** — `tayfa-ping <tag>` always appends to
-  `dev/coordination/.pings/<tag>.log` (durable; surfaced at the
-  recipient's next registration), plus `tmux send-keys` and
-  `notify-send` when available.
+  `dev/coordination/.pings/<tag>.log`, plus `tmux send-keys` and
+  `notify-send` when available. The log is permanent history, never
+  rewritten. `tayfa-ping --unread <tag>` shows what arrived since the
+  tag last read (newest 20 / 12k chars; older ones counted, with the
+  `sed` line range to read them) and advances a byte cursor in
+  `.pings/<tag>.cursor`; `--peek` reads without advancing. Registration
+  runs it, and agents run it in their cron ticks instead of tailing the
+  log. Where no tmux target exists (VSCode), this is the only way a
+  live session receives a ping.
 
 The `.presence/` and `.pings/` directories are gitignored
 automatically by `tayfa-init` (older projects: add
