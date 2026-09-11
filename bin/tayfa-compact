@@ -191,13 +191,13 @@ def cmd_prompt(coord: Path, stdin: dict) -> None:
     if tag:
         board = f"dev/coordination/scratchboards/{tag}/inflight.md"
         who = f"tayfa agent @{tag}"
-        inbox_cmds = f"`tayfa-inbox {tag}` and `tayfa-ask check {tag}`"
+        inbox_cmds = f"`tayfa-inbox {tag}`"
     else:
         board = "dev/coordination/scratchboards/<your tag>/inflight.md"
         who = ("a tayfa agent (tag unresolved — your registration likely broke "
                "during compaction; identify yourself from your scratchboard and "
                "re-run register_presence.sh)")
-        inbox_cmds = "`tayfa-inbox <tag>` and `tayfa-ask check <tag>`"
+        inbox_cmds = "`tayfa-inbox <tag>`"
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
         "additionalContext": (

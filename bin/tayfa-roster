@@ -42,7 +42,6 @@ from pathlib import Path
 GONE_VISIBLE_SECS = 24 * 3600
 DEFAULT_STALE_AFTER = 1200
 DEFAULT_PORT = 8533
-STORE_NAMES = ("usta_inbox", "ali_inbox")  # usta inbox store; legacy fallback second
 
 
 def find_coord_dir(start: Path) -> Path | None:
@@ -200,47 +199,6 @@ def run_extra_column(cmd: str, tag: str, repo_root: Path) -> str:
         return "?"
 
 
-# ── usta inbox (read + answer; store shared with tayfa-ask) ──
-
-def resolve_store(coord_dir: Path) -> Path:
-    for name in STORE_NAMES:
-        d = coord_dir / name
-        if d.is_dir():
-            return d
-    return coord_dir / STORE_NAMES[0]
-
-
-def inbox_items(coord_dir: Path) -> list[dict]:
-    store = resolve_store(coord_dir)
-    items = []
-    if store.is_dir():
-        for p in store.glob("*.json"):
-            entry = load_entry(p)
-            if isinstance(entry, dict) and entry.get("id"):
-                items.append(entry)
-    return items
-
-
-def inbox_update(coord_dir: Path, item_id: str, *, answer: str | None) -> bool:
-    """Answer a question (answer=str) or mark an fyi seen (answer=None)."""
-    store = resolve_store(coord_dir)
-    p = store / f"{item_id}.json"
-    if not p.is_file() or p.resolve().parent != store.resolve():
-        return False
-    item = load_entry(p)
-    if not isinstance(item, dict):
-        return False
-    if answer is not None:
-        item["answer"] = answer.strip()
-        item["status"] = "answered"
-    else:
-        item["status"] = "seen"
-    item["answered_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    item["acked"] = False
-    p.write_text(json.dumps(item, indent=2, ensure_ascii=False) + "\n")
-    return True
-
-
 # ── web server ──
 
 STATUS_COLOR = {
@@ -301,7 +259,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <style>{css}</style>
 </head><body>
 <h1>tayfa roster <small>— {project}</small></h1>
-<div class="summary">{summary} · refreshed {now} UTC · auto-refresh 20s · {inbox_link}</div>
+<div class="summary">{summary} · refreshed {now} UTC · auto-refresh 20s</div>
 <div class="tablewrap"><table>
 <tr><th>agent</th><th>status</th><th>last beat</th><th>ticks</th><th>uptime</th><th>tmux</th><th>note</th>{extra_headers}</tr>
 {rows}
@@ -310,84 +268,6 @@ PAGE_TEMPLATE = """<!doctype html>
 GONE = session ended (shown 24h) · JSON: <a href="roster.json">roster.json</a></footer>
 </body></html>
 """
-
-INBOX_TEMPLATE = """<!doctype html>
-<html><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>usta inbox — {project}</title>
-<style>{css}</style>
-</head><body>
-<h1>usta inbox <small>— {project}</small></h1>
-<div class="summary"><a href=".">&larr; roster</a> · agents push here via
-<code>tayfa-ask</code>; your answers flow back to them by id.</div>
-<h2>&#10067; questions waiting on you ({n_q})</h2>{qs}
-<h2>&#128276; for your review ({n_f})</h2>{fs}
-<details><summary>answered / seen ({n_d})</summary>{ds}</details>
-<script>
-async function post(url, data) {{
-  const r = await fetch(url, {{method:'POST', headers:{{'content-type':'application/json'}},
-                              body: JSON.stringify(data)}});
-  if (r.ok) location.reload(); else alert('failed: ' + r.status);
-}}
-function answer(id) {{
-  const t = document.getElementById('t-' + id);
-  if (!t.value.trim()) {{ alert('write an answer first'); return; }}
-  post('inbox/answer', {{id: id, answer: t.value}});
-}}
-function seen(id) {{ post('inbox/seen', {{id: id}}); }}
-</script>
-</body></html>
-"""
-
-
-def _safe_link(link: str) -> str:
-    """Only root-relative or http(s) links get rendered."""
-    if link.startswith("/") or link.startswith("http://") or link.startswith("https://"):
-        return link
-    return ""
-
-
-def render_inbox_html(coord_dir: Path) -> str:
-    items = inbox_items(coord_dir)
-    project = html.escape(coord_dir.parent.parent.name)
-
-    def card(i: dict, answered: bool) -> str:
-        link = _safe_link(i.get("link", ""))
-        link_html = (f"<p><a href='{html.escape(link)}' target=_blank>&#128279; {html.escape(link)}</a></p>"
-                     if link else "")
-        ctx = (f"<pre class=ctx>{html.escape(i['context'])}</pre>" if i.get("context") else "")
-        head = (f"<span class=owner>@{html.escape(i.get('from', '?'))}</span> &middot; "
-                f"<span class=detail>{html.escape(i.get('created_at', ''))} &middot; "
-                f"<code>{html.escape(i['id'])}</code></span>")
-        if answered:
-            body = (f"<pre class=ans>{html.escape(i.get('answer') or '(marked seen)')}</pre>"
-                    f"<p class=detail>answered {html.escape(i.get('answered_at', ''))}"
-                    f"{' &middot; acked by agent' if i.get('acked') else ' &middot; not yet read by agent'}</p>")
-        elif i.get("kind") == "question":
-            body = (f"<textarea id='t-{html.escape(i['id'])}' rows=3 placeholder='your answer…'></textarea>"
-                    f"<button onclick=\"answer('{html.escape(i['id'])}')\">answer</button>")
-        else:
-            body = f"<button onclick=\"seen('{html.escape(i['id'])}')\">mark seen</button>"
-        kind_badge = "&#10067;" if i.get("kind") == "question" else "&#128276;"
-        return (f"<div class=card><p>{kind_badge} <b>{html.escape(i.get('title', '?'))}</b><br>{head}</p>"
-                f"{ctx}{link_html}{body}</div>")
-
-    open_q = sorted((i for i in items if i.get("status") == "open" and i.get("kind") == "question"),
-                    key=lambda x: x.get("created_at", ""))
-    open_f = sorted((i for i in items if i.get("status") == "open" and i.get("kind") != "question"),
-                    key=lambda x: x.get("created_at", ""), reverse=True)
-    done = sorted((i for i in items if i.get("status") != "open"),
-                  key=lambda x: x.get("answered_at") or "", reverse=True)
-
-    return INBOX_TEMPLATE.format(
-        css=BASE_CSS, project=project,
-        n_q=len(open_q), n_f=len(open_f), n_d=len(done),
-        qs="".join(card(i, False) for i in open_q) or "<p class=detail>no open questions 🎉</p>",
-        fs="".join(card(i, False) for i in open_f) or "<p class=detail>nothing new to review</p>",
-        ds="".join(card(i, True) for i in done) or "<p class=detail>none yet</p>",
-    )
-
 
 def render_html(coord_dir: Path, stale_after: int) -> str:
     rows = gather_rows(coord_dir, stale_after)
@@ -423,14 +303,11 @@ def render_html(coord_dir: Path, stale_after: int) -> str:
 
     summary = f"{counts['AWAKE']} awake · {counts['QUIET']} quiet · {counts['GONE']} gone"
     extra_headers = "".join(f"<th>{html.escape(c['name'])}</th>" for c in extra_cols)
-    n_open = sum(1 for i in inbox_items(coord_dir) if i.get("status") == "open")
-    inbox_link = (f"<a href='inbox'><b>&#128229; inbox ({n_open})</b></a>" if n_open
-                  else "<a href='inbox'>&#128229; inbox</a>")
     return PAGE_TEMPLATE.format(
         css=BASE_CSS, project=project, summary=summary,
         now=datetime.now(timezone.utc).strftime("%H:%M:%S"),
         rows="\n".join(body_rows), extra_headers=extra_headers,
-        stale=stale_after // 60, inbox_link=inbox_link,
+        stale=stale_after // 60,
     )
 
 
@@ -451,31 +328,12 @@ def serve(coord_dir: Path, bind: str, port: int, stale_after: int) -> int:
                            "application/json")
             elif path == "/":
                 self._send(render_html(coord_dir, stale_after).encode(), "text/html; charset=utf-8")
-            elif path == "/inbox":
-                self._send(render_inbox_html(coord_dir).encode(), "text/html; charset=utf-8")
-            elif path == "/inbox.json":
-                self._send(json.dumps(inbox_items(coord_dir), indent=2).encode(),
-                           "application/json")
+            elif path in ("/inbox", "/inbox.json"):
+                # retired with tayfa-ask (2026-09-11): the usta talks to agents in chat
+                self._send(b"The usta inbox is retired (2026-09-11). Agents talk to the usta in chat.\n",
+                           "text/plain; charset=utf-8", 410)
             else:
                 self.send_error(404)
-
-        def do_POST(self):  # noqa: N802
-            path = self.path.split("?", 1)[0]
-            if path not in ("/inbox/answer", "/inbox/seen"):
-                self.send_error(404)
-                return
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                data = json.loads(self.rfile.read(length) or b"{}")
-                item_id = str(data.get("id", ""))
-            except (ValueError, json.JSONDecodeError):
-                self.send_error(400)
-                return
-            answer = str(data.get("answer", "")) if path == "/inbox/answer" else None
-            if not item_id or not inbox_update(coord_dir, item_id, answer=answer):
-                self.send_error(404)
-                return
-            self._send(b'{"ok": true}', "application/json")
 
         def log_message(self, *args):  # quiet
             pass

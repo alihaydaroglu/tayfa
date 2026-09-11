@@ -44,7 +44,7 @@ etc., or let Claude pick the right one based on intent.
 
 ```
 tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag (incl. @all broadcasts)
-tayfa-ask <cmd>       # push questions/FYIs to the usta (the human); read answers
+tayfa-ask <cmd>       # RETIRED 2026-09-11: agents talk to the usta in chat
 tayfa-slack <cmd>     # optional Slack bridge: inbox mirror + usta<->agent convos
 ```
 
@@ -58,11 +58,12 @@ the current working directory looking for
 `dev/coordination/AGENTS.md` and uses the directory it finds. Pass
 `--coord-dir <path>` to override.
 
-The usta inbox (`tayfa-ask` — ask/fyi/check/ack/list) stores items
-one-JSON-file-each under `dev/coordination/usta_inbox/` (legacy
-`ali_inbox/` is auto-detected), so concurrent agents never clobber each
-other; the human answers on the dashboard's `/inbox` page (below) and
-answers flow back by item id.
+**Talking to the usta (the human) happens in chat.** An agent puts its
+question or its review link in its reply, in its own session, and ends
+its turn with it. The file inbox that used to carry this (`tayfa-ask`,
+`dev/coordination/usta_inbox/`) was retired on 2026-09-11: in its
+busiest project 1 of 126 questions filed through it was ever answered.
+`tayfa-ask` is now a shim that says so and writes nothing.
 
 The four core skills (`tayfa-init`, `tayfa-add-agent`,
 `tayfa-add-workstream`, `tayfa-onboard`) plus the inbox CLI are all
@@ -107,11 +108,9 @@ How it works:
   review"` to publish a status line; the note persists across
   automatic beats until replaced.
 - **The dashboard** — `tayfa-roster --serve [--port 8533]` is a
-  zero-dependency loopback HTTP server with two pages: `/` (the roster,
-  auto-refreshing) and `/inbox` (the **usta inbox** — the human answers
-  agents' `tayfa-ask` questions right on the page, marks FYIs seen).
-  `/roster.json` + `/inbox.json` serve machines (a future watchdog's
-  input). All intra-page URLs are relative, so it works standalone or
+  zero-dependency loopback HTTP server: `/` (the roster,
+  auto-refreshing) and `/roster.json` for machines (a future watchdog's
+  input). (The `/inbox` page went with `tayfa-ask`, retired 2026-09-11.) All intra-page URLs are relative, so it works standalone or
   behind a reverse-proxy prefix (e.g. a project portal at `/s/roster/`). Status
   model: **AWAKE** (beat fresher than `--stale-after`, default 20 min),
   **QUIET** (session alive but no fresh beat — idle, or its cron/loop
@@ -155,6 +154,10 @@ automatically by `tayfa-init` (older projects: add
 churn every turn and must never hit git).
 
 ## Optional: the Slack bridge (`tayfa-slack`)
+
+> **Dormant.** The item mirror below rode `tayfa-ask`, which was retired
+> on 2026-09-11 (agents talk to the usta in chat). It never ran in
+> production; the free-form convo half is the part still worth anything.
 
 Mirrors the usta inbox into a Slack channel and routes replies back —
 so the human can run the crew from their phone:
@@ -223,8 +226,8 @@ packages/tayfa/
 ├── install.sh
 ├── bin/
 │   ├── tayfa-inbox     ← project-agnostic inbox tool
-│   ├── tayfa-roster    ← dashboard: roster + usta inbox (CLI + --serve)
-│   ├── tayfa-ask       ← usta inbox CLI (ask/fyi/check/ack/list)
+│   ├── tayfa-roster    ← dashboard: roster (CLI + --serve)
+│   ├── tayfa-ask       ← RETIRED shim: tells agents to use chat
 │   ├── tayfa-ping      ← real-time ping
 │   ├── tayfa-beat      ← heartbeat (Stop-hook target)
 │   ├── tayfa-compact   ← compaction parachute (Pre/PostCompact hook target)

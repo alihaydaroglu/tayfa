@@ -56,7 +56,6 @@ project.
 4. **Find your work.** Run:
    ```bash
    tayfa-inbox <tag>
-   tayfa-ask check <tag>    # the usta's (human's) answers to your questions
    ```
    Lists open tasks, open bugs, and unresolved memos addressed to
    `@<tag>`, with file:line refs.
@@ -142,13 +141,20 @@ not read long texts:
 2. The page should SHOW the feature (screenshots, live UI, before/
    after, gallery — whatever fits) plus a few bullet lines of what's
    implemented. Bullets, not essays.
-3. Post the portal link in your DONE memo, **and send it to the usta's
-   inbox**: `tayfa-ask fyi --from <tag> --title "..." --link /s/<slug>/`.
-   Questions for the human also go through `tayfa-ask ask` (with
-   `--context`); poll answers with `tayfa-ask check <tag>`. The human
-   answers on the dashboard (`tayfa-roster --serve` → `/inbox`).
+3. Post the portal link in your DONE memo, **and give it to the usta in
+   chat**: your reply, in your own session, with the full clickable URL.
 
 Good exemplars: the ltx spike gallery, the KFE UI preview.
+
+## Talking to the usta: in chat, never a side channel
+
+The usta (the human) reads the chat of the session they are working in.
+**A question for them, or a link for them to look at, goes in your
+reply**, stated so it can be answered in one line, and you end your turn
+with it. Do not file it anywhere else and wait: `tayfa-ask` and the
+`usta_inbox/` it wrote to were retired on 2026-09-11 because nothing
+read them (1 of 126 questions ever answered). If the answer blocks you,
+say so in that reply; do not guess past it.
 
 ## Presence, beats, and the roster ("tayfa pulse")
 
@@ -195,7 +201,7 @@ hooks (`tayfa-compact --pre/--post` on PreCompact/PostCompact):
 - The PreCompact hook tells the summarizer to preserve that state; the
   PostCompact hook injects your re-entry ritual: read inflight.md
   (trust it over the summary), CronList + **re-arm everything under
-  `## armed`**, run your inbox + `tayfa-ask check`, update your beat
+  `## armed`**, run your inbox, update your beat
   note, then **rewrite inflight.md fresh** — that rewrite is the
   between-compactions clear. If you have a ROLE file, re-read your
   `roles/<role>.md` too: compaction blurs exactly the standing rules a
@@ -221,7 +227,7 @@ appearing under your tag; your files changing under you):
    forks share the session id); killing hosts is the human's call —
    they close the extra window.
 3. **Freeze side effects** (disarm your loop, no pushes/merges/deploys)
-   and surface it to the human (`tayfa-ask ask` / chat) with the
+   and surface it to the human in chat with the
    evidence: both pids, `ps -o lstart= -p <pid>` start times, what
    collided. Then wait.
 4. If you must know which copy is older, process **start time** is the
