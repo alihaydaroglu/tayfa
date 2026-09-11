@@ -209,6 +209,9 @@ def cmd_prompt(coord: Path, stdin: dict) -> None:
             "CronList, then re-arm everything in the file's '## armed' section. "
             f"(3) Run {inbox_cmds} for anything that arrived meanwhile. "
             "(4) Update your heartbeat note: `tayfa-beat --note \"...\"`. "
+            "(4b) If your scratchboard has a ROLE file, re-read "
+            "dev/coordination/roles/<role>.md for each line in it: a role's "
+            "standing rules are what a summary blurs. "
             "(5) Rewrite the inflight file fresh — keep only still-true items. "
             "Then continue where you left off.")}}))
 

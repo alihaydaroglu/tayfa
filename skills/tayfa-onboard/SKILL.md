@@ -83,6 +83,14 @@ project.
    below an `<!-- archive -->` line (or into `scratchboards/<tag>/archive/`).
    Grep the archive when you need it; never read it to get oriented.
 
+5b. **Your role, if you have one.** If
+   `dev/coordination/scratchboards/<tag>/ROLE` exists, you were given a
+   project-defined role (registration in step 3 printed it). For each
+   line, read `dev/coordination/roles/<first word>.md` **in full** and do
+   what it says before step 6. The rest of the line is detail the role's
+   setup recorded for you (for example the path of your working tree).
+   A role **adds** to this ritual; it never replaces or skips a step.
+
 6. **Read your items on the workstream file(s) — never the file.**
    Boards run to 100k+ words. **Do not `cat`, Read or skim a board.**
    Open only the `file:line` refs your inbox gave you, plus the
@@ -104,7 +112,7 @@ project.
 ## After the ritual
 
 Tell the user, in 2–3 sentences:
-- The tag you're onboarding as.
+- The tag you're onboarding as, and your role if you have one.
 - The shape of your inbox (e.g. "3 open tasks, 1 memo, no bugs").
 - What you're going to do first (the highest-priority item from the
   inbox, or a question if you need clarification).
@@ -189,7 +197,9 @@ hooks (`tayfa-compact --pre/--post` on PreCompact/PostCompact):
   (trust it over the summary), CronList + **re-arm everything under
   `## armed`**, run your inbox + `tayfa-ask check`, update your beat
   note, then **rewrite inflight.md fresh** — that rewrite is the
-  between-compactions clear.
+  between-compactions clear. If you have a ROLE file, re-read your
+  `roles/<role>.md` too: compaction blurs exactly the standing rules a
+  role carries.
 - If your session's host process gets respawned (new PID — happens
   under some harnesses), your beats silently stop: re-run step 3 to
   re-register (it replaces entries whose pid is dead). Hooks NEVER

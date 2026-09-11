@@ -201,6 +201,16 @@ Mode needed.
   `scratchboards/<tag>/main.md`. Other agents don't read it.
 - Every workstream file has a **Change Log** at the bottom — one
   reverse-chron line per material change.
+- **Roles** (optional, per project). A project may define a role as
+  `dev/coordination/roles/<role>.md` (who gets it, what setup args it
+  takes, what an agent in that role reads and does at onboard) plus an
+  optional idempotent setup hook `roles/<role>.sh`. `add_agent.sh <tag>
+  --role <role> [args]` records it in `scratchboards/<tag>/ROLE` and
+  runs the hook; on an existing tag it attaches the role instead of
+  refusing. `register_presence.sh` prints the role, `tayfa-onboard`
+  step 5b sends the agent to the role file, and the post-compaction
+  re-entry has it re-read. A role adds to the ritual, never replaces a
+  step. Projects with no `roles/` directory see no change.
 
 The full conventions live in the scaffolded `README.md` and
 `AGENTS.md` once you run `tayfa-init`.

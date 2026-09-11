@@ -134,6 +134,19 @@ PYEOF
 
 echo "Registered @$TAG → PID $SESSION_PID ($SESSION_COMM) at $PRESENCE_FILE"
 
+# Roles: project-defined add-ons to the onboarding ritual (tayfa-onboard
+# step 5b). Printed here too so a re-registration after compaction or a
+# host respawn surfaces them again. First word of a line is the role.
+ROLE_FILE="$COORD_DIR/scratchboards/$TAG/ROLE"
+if [[ -s "$ROLE_FILE" ]]; then
+    echo
+    echo "── @$TAG has a role: read each role file now (tayfa-onboard step 5b) ──"
+    while read -r role rest || [[ -n "${role:-}" ]]; do
+        [[ -z "${role:-}" || "$role" == \#* ]] && continue
+        echo "  $role${rest:+  ($rest)}  →  $COORD_DIR/roles/$role.md"
+    done < "$ROLE_FILE"
+fi
+
 # Show the pings that arrived since this tag last read, and mark them read.
 # The log is permanent history; tayfa-ping --unread keeps a cursor beside it
 # and caps what it prints. Never let a ping problem fail the registration.
