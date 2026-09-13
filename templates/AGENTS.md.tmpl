@@ -31,6 +31,14 @@ If the tool isn't available, a raw grep works as a fallback:
 `grep -rn "@<tag>" *.md` — but expect noise (registry rows, authorship,
 change log entries). The inbox tool filters those out.
 
+### Aliases
+
+An agent may answer to a short second name: `aliases.json` in this
+directory maps `{"alias": "canonical"}`. Every tayfa tool accepts either
+and resolves to the canonical tag before touching a file (`tayfa-inbox
+<canonical>` also lists work addressed to `@<alias>`). Say the alias in
+the agent's row so people know it exists.
+
 ### Finishing work
 
 When you complete a task or address a memo:

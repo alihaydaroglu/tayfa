@@ -53,6 +53,15 @@ tayfa-slack <cmd>     # optional Slack bridge: inbox mirror + usta<->agent convo
 acks an @all memo for itself by appending its own `#<tag>` to the To:
 line; the memo is struck `~~` only when everyone relevant has acked.
 
+**Aliases.** A project may give an agent a short second name in
+`dev/coordination/aliases.json` (`{"kfe": "keyframe_editor"}`; keys
+starting with `_` are comments). Every tool accepts either name and
+resolves to the canonical one before touching a file: `/tayfa-onboard
+kfe` registers `@keyframe_editor`, `tayfa-inbox keyframe_editor` also
+lists work addressed to `@kfe`, `tayfa-ping kfe` lands in
+`keyframe_editor`'s log. Matching is whole-tag, so `@kfe` never claims
+`@kfe_polish`'s mail.
+
 That's the whole essential surface area. `tayfa-inbox` walks up from
 the current working directory looking for
 `dev/coordination/AGENTS.md` and uses the directory it finds. Pass

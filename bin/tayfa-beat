@@ -51,6 +51,39 @@ def find_coord_dir(start: Path) -> Path | None:
         cur = cur.parent
 
 
+
+# ── Tag aliases ─────────────────────────────────────────────────────────
+#
+# A project may map short tags to canonical ones in
+# `dev/coordination/aliases.json` ({"kfe": "keyframe_editor"}; keys that
+# start with "_" are comments). One agent, several names: the alias is
+# accepted wherever a tag is, and resolves to the canonical tag BEFORE any
+# file is touched, so presence, beats, pings and scratchboards all live
+# under the canonical name.
+
+def load_aliases(coord_dir: Path) -> dict[str, str]:
+    """{alias: canonical}. Missing or unparseable file = no aliases."""
+    try:
+        data = json.loads((coord_dir / "aliases.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).lstrip("@"): str(v).lstrip("@")
+            for k, v in data.items()
+            if isinstance(v, str) and not str(k).startswith("_")}
+
+
+def canonical_tag(coord_dir: Path, tag: str) -> str:
+    return load_aliases(coord_dir).get(tag, tag)
+
+
+def tag_names(coord_dir: Path, tag: str) -> list[str]:
+    """The canonical tag first, then every alias of it."""
+    aliases = load_aliases(coord_dir)
+    canon = aliases.get(tag, tag)
+    return [canon] + sorted(a for a, c in aliases.items() if c == canon)
+
 def ancestor_pids(limit: int = 25) -> list[int]:
     """This process's PID chain, nearest first, up to init."""
     chain: list[int] = []
@@ -150,6 +183,7 @@ def beat(coord_dir: Path | None, tag: str | None, note: str | None,
     tag = (tag or "").lstrip("@").strip() or resolve_tag(presence_dir, session_id)
     if not tag:
         return "session not registered in .presence/ — skipped"
+    tag = canonical_tag(coord, tag)   # `--tag kfe` / TAYFA_TAG=kfe beat as keyframe_editor
 
     beats_dir = presence_dir / "beats"
     beats_dir.mkdir(exist_ok=True)

@@ -9,6 +9,17 @@ Opening ritual for a fresh agent context. The user invokes this with
 their tag, e.g. `/tayfa-onboard backend`. If no tag was given, ask
 the user which `@tag` they're onboarding as before proceeding.
 
+## Aliases
+
+A project may give an agent a short second name in
+`dev/coordination/aliases.json` (`{"kfe": "keyframe_editor"}`).
+`/tayfa-onboard kfe` **is** `/tayfa-onboard keyframe_editor`: registration
+(step 3) prints the canonical tag, and from then on every `<tag>` in this
+ritual means the canonical one — the scratchboard, `tayfa-inbox`, beats,
+the boards' `### Tasks — @<tag>` sections. The alias is accepted by every
+tayfa tool: work addressed to `@kfe` on a board reaches the canonical
+inbox, and `tayfa-ping kfe` lands in the canonical log. Answer to both.
+
 ## The ritual
 
 Do these steps in order. Each one is short — the whole thing is ~15

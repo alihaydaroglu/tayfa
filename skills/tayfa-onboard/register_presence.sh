@@ -49,6 +49,28 @@ if ! COORD_DIR="$(find_coord_dir)"; then
     exit 1
 fi
 
+# Tag aliases: <coord>/aliases.json maps short tags to canonical ones
+# ({"kfe": "keyframe_editor"}). Resolve BEFORE anything is written, so the
+# presence entry, beats, pings and scratchboard all live under the
+# canonical name and the alias is just another way to say it.
+CANON="$(python3 - "$COORD_DIR/aliases.json" "$TAG" <<'PYEOF'
+import json, sys
+path, tag = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except (OSError, ValueError):
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+print(str(data.get(tag, tag)).lstrip("@"))
+PYEOF
+)"
+if [[ -n "$CANON" && "$CANON" != "$TAG" ]]; then
+    echo "@$TAG is an alias of @$CANON ($COORD_DIR/aliases.json): registering as @$CANON."
+    echo "  Use '$CANON' for the rest of the ritual — scratchboards/$CANON/, tayfa-inbox $CANON, the boards' @$CANON sections."
+    TAG="$CANON"
+fi
+
 # Walk up from $PPID skipping transient shells to find the long-lived
 # session process (typically the claude binary itself).
 find_session_pid() {

@@ -27,12 +27,46 @@ appears there, and is struck `~~` only when everyone relevant has.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
 
 
 SKIP_FILES = {"README.md", "AGENTS.md", "ONBOARDING.md"}
+
+
+# ── Tag aliases ─────────────────────────────────────────────────────────
+#
+# A project may map short tags to canonical ones in
+# `dev/coordination/aliases.json` ({"kfe": "keyframe_editor"}; keys that
+# start with "_" are comments). One agent, several names: the alias is
+# accepted wherever a tag is, and resolves to the canonical tag BEFORE any
+# file is touched, so presence, beats, pings and scratchboards all live
+# under the canonical name.
+
+def load_aliases(coord_dir: Path) -> dict[str, str]:
+    """{alias: canonical}. Missing or unparseable file = no aliases."""
+    try:
+        data = json.loads((coord_dir / "aliases.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).lstrip("@"): str(v).lstrip("@")
+            for k, v in data.items()
+            if isinstance(v, str) and not str(k).startswith("_")}
+
+
+def canonical_tag(coord_dir: Path, tag: str) -> str:
+    return load_aliases(coord_dir).get(tag, tag)
+
+
+def tag_names(coord_dir: Path, tag: str) -> list[str]:
+    """The canonical tag first, then every alias of it."""
+    aliases = load_aliases(coord_dir)
+    canon = aliases.get(tag, tag)
+    return [canon] + sorted(a for a, c in aliases.items() if c == canon)
 
 
 def find_coord_dir(start: Path) -> Path | None:
@@ -136,10 +170,24 @@ def iter_sections(lines: list[str]):
         yield current_header, current_body, current_start
 
 
-def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, int, str]]]:
-    """Return {category: [(file, line_no, text), ...]}."""
-    tag_at = f"@{tag}"
-    tag_hash = f"#{tag}"
+def _mention(sigil: str, names: list[str]) -> re.Pattern:
+    """`@name` / `#name` as a whole tag — `@kfe` must not match `@kfe_polish`
+    (an alias is usually a PREFIX of other tags, so a bare substring test
+    would hand an alias its neighbours' mail)."""
+    alt = "|".join(re.escape(n) for n in names)
+    return re.compile(rf"{re.escape(sigil)}(?:{alt})(?![A-Za-z0-9_])")
+
+
+def find_open_items(tag: str | list[str], files: list[Path]) -> dict[str, list[tuple[Path, int, str]]]:
+    """Return {category: [(file, line_no, text), ...]}.
+
+    `tag` may be a list: the canonical tag plus its aliases, all of which
+    address the same agent."""
+    names = [tag] if isinstance(tag, str) else list(tag)
+    at_re = _mention("@", names)
+    hash_re = _mention("#", names)
+    task_hdr = re.compile(rf"^Tasks — (?:@all|{at_re.pattern})")
+    bug_hdr = re.compile(rf"^Bugs — (?:@all|{at_re.pattern})")
 
     open_tasks: list[tuple[Path, int, str]] = []
     open_bugs: list[tuple[Path, int, str]] = []
@@ -153,8 +201,8 @@ def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, i
         lines = f.read_text(encoding="utf-8").splitlines()
 
         for header, body, header_line in iter_sections(lines):
-            is_task_section = header.startswith(f"Tasks — {tag_at}") or header.startswith("Tasks — @all")
-            is_bug_section = header.startswith(f"Bugs — {tag_at}") or header.startswith("Bugs — @all")
+            is_task_section = bool(task_hdr.match(header))
+            is_bug_section = bool(bug_hdr.match(header))
             bucket = (
                 open_tasks if is_task_section
                 else open_bugs if is_bug_section
@@ -173,9 +221,9 @@ def find_open_items(tag: str, files: list[Path]) -> dict[str, list[tuple[Path, i
             acknowledged = False
             for _line_no, line in body:
                 if line.startswith("**To:**"):
-                    if tag_at in line or "@all" in line:
+                    if at_re.search(line) or "@all" in line:
                         addressed = True
-                    if tag_hash in line:
+                    if hash_re.search(line):
                         acknowledged = True
             if addressed and not acknowledged:
                 memos.append((f, header_line, header))
@@ -231,8 +279,10 @@ def main() -> int:
         print(f"ERROR: {coord_dir} does not look like a coord dir (no AGENTS.md).", file=sys.stderr)
         return 1
 
+    names = tag_names(coord_dir, tag)      # canonical first, then aliases
+    tag = names[0]
     files = sorted(f for f in coord_dir.glob("*.md") if f.name not in SKIP_FILES)
-    results = find_open_items(tag, files)
+    results = find_open_items(names, files)
 
     stale_days = 0 if args.all else max(0, args.stale_days)
     limit = 0 if args.all else max(0, args.limit)
@@ -253,7 +303,8 @@ def main() -> int:
 
     width = 60
     print("=" * width)
-    print(f"  INBOX for @{tag}")
+    also = f"  (also @{', @'.join(names[1:])})" if len(names) > 1 else ""
+    print(f"  INBOX for @{tag}{also}")
     print(f"  ({coord_dir})")
     print("=" * width)
     print()

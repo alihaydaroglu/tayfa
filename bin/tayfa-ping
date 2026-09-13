@@ -57,6 +57,39 @@ def find_coord_dir(start: Path) -> Path | None:
         cur = cur.parent
 
 
+
+# ── Tag aliases ─────────────────────────────────────────────────────────
+#
+# A project may map short tags to canonical ones in
+# `dev/coordination/aliases.json` ({"kfe": "keyframe_editor"}; keys that
+# start with "_" are comments). One agent, several names: the alias is
+# accepted wherever a tag is, and resolves to the canonical tag BEFORE any
+# file is touched, so presence, beats, pings and scratchboards all live
+# under the canonical name.
+
+def load_aliases(coord_dir: Path) -> dict[str, str]:
+    """{alias: canonical}. Missing or unparseable file = no aliases."""
+    try:
+        data = json.loads((coord_dir / "aliases.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).lstrip("@"): str(v).lstrip("@")
+            for k, v in data.items()
+            if isinstance(v, str) and not str(k).startswith("_")}
+
+
+def canonical_tag(coord_dir: Path, tag: str) -> str:
+    return load_aliases(coord_dir).get(tag, tag)
+
+
+def tag_names(coord_dir: Path, tag: str) -> list[str]:
+    """The canonical tag first, then every alias of it."""
+    aliases = load_aliases(coord_dir)
+    canon = aliases.get(tag, tag)
+    return [canon] + sorted(a for a, c in aliases.items() if c == canon)
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -205,6 +238,11 @@ def main() -> int:
         print("ERROR: could not find dev/coordination/AGENTS.md in any ancestor of cwd.",
               file=sys.stderr)
         return 1
+
+    canon = canonical_tag(coord_dir, tag)
+    if canon != tag:
+        print(f"@{tag} is an alias of @{canon} (aliases.json)")
+        tag = canon
 
     if args.unread:
         return read_unread(coord_dir, tag, args.limit, args.max_chars, args.peek)
