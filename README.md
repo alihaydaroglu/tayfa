@@ -43,7 +43,8 @@ etc., or let Claude pick the right one based on intent.
 ## CLI — core
 
 ```
-tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag (incl. @all broadcasts)
+tayfa-inbox <tag>     # tasks/bugs/memos addressed to @tag (incl. @all broadcasts); memos on dormant boards
+                      # or dated >21 d ago go to a HISTORY footer (--all, --memo-days 0 restore them)
 tayfa-ask <cmd>       # RETIRED 2026-09-11: agents talk to the usta in chat
 tayfa-slack <cmd>     # optional Slack bridge: inbox mirror + usta<->agent convos
 ```
@@ -78,6 +79,14 @@ The four core skills (`tayfa-init`, `tayfa-add-agent`,
 `tayfa-add-workstream`, `tayfa-onboard`) plus the inbox CLI are all
 you need to use tayfa. Stop here if that's all you want.
 
+## Per-project switches: `dev/coordination/tayfa.json`
+
+Optional. Every tool reads it tolerantly (missing file or key = the
+tool's default), so each switch is undone by deleting one key:
+`memo_stale_days` (inbox; 0 = off), `ping_fold_status` (ping --unread;
+false = show all in full), plus whatever a project's own scripts add
+(nima: `lane_cap_enforce`, `lane_active_days`, `state_max_words`).
+
 ## Presence, beats, and the roster ("tayfa pulse")
 
 Presence registration is a **default step of the onboarding ritual**
@@ -88,8 +97,9 @@ tools:
 ```
 tayfa-roster                  # CLI: list awake agents (PID-validated)
 tayfa-roster --serve          # loopback web roster on :8533 + /roster.json
-tayfa-ping <tag> "<message>"  # tmux send-keys + log + notify
-tayfa-ping --unread <tag>     # pings since you last read, then mark read
+tayfa-ping <tag> "<message>"  # tmux send-keys + log + notify (sender = --from, $TAYFA_TAG, or the calling session's registered tag)
+tayfa-ping --status <tag> "…" # a status report, not an ask: readers see it as one line
+tayfa-ping --unread <tag>     # pings since you last read, then mark read (status + @system folded to one line each; --full shows all)
 tayfa-beat [--note "..."]     # heartbeat (usually fired by a Stop hook)
 ```
 

@@ -60,9 +60,12 @@ project.
    since your tag last read them (the newest 20, capped) and marks them
    read, and plugs you into the pulse system
    (heartbeats + `tayfa-roster`; see "Presence, beats, and the roster"
-   below). If it refuses because the tag is already registered to a
-   live session, tell the user — there may be a duplicate session —
-   and continue the ritual without registering.
+   below). A session that comes back on the SAME host pid (a resume
+   under the VSCode extension) is recognised as a resume and simply
+   re-registered, with a line saying so. If it refuses because the tag
+   is registered to a live session on a DIFFERENT pid, tell the user —
+   there may be a duplicate session — and continue the ritual without
+   registering.
 
 4. **Find your work.** Run:
    ```bash
@@ -72,9 +75,12 @@ project.
    `@<tag>`, with file:line refs.
 
    By default this lists only **live** work: memos on boards with no
-   commit in 14 days are counted in a `── HISTORY ──` footer instead of
-   listed, and each section is capped at 40. `--all` (or `--limit 0`,
-   `--stale-days 0`) brings the full record back. If the inbox is empty,
+   commit in 14 days, and memos whose header date is older than 21 days
+   (`tayfa.json` `memo_stale_days`; the acknowledgement ritual is not
+   followed, so age is the signal), are counted in a `── HISTORY ──`
+   footer instead of listed, and each section is capped at 40. `--all`
+   (or `--limit 0`, `--stale-days 0`, `--memo-days 0`) brings the full
+   record back. Tasks and bugs are never filtered. If the inbox is empty,
    ask the user what they want you to work on — don't invent work.
 
 5. **Read your scratchboard — the top of it.** Read
@@ -152,7 +158,20 @@ not read long texts:
 2. The page should SHOW the feature (screenshots, live UI, before/
    after, gallery — whatever fits) plus a few bullet lines of what's
    implemented. Bullets, not essays.
-3. Post the portal link in your DONE memo, **and give it to the usta in
+3. **Newest on top, stale out** (@ali 2026-09-24: *"as a general rule, all
+   agents in nima, when they are producing spikes, should put updates at
+   the top of pages, and try to remove stale items."*): every update
+   goes at the TOP of the page, never appended at the bottom; when
+   something is superseded (an older version, a rejected option, a fixed
+   defect, a question already answered), take it off the page or fold it
+   into a collapsed "older" section at the very bottom. The page shows
+   what is current.
+4. **Make it commentable** (@ali 2026-09-24: *"i enjoyed reviewing novels
+   desk ... that should be our house style"*): anchored comments on every
+   block, via the shared kit `dev/local/review_kit/` (read its README; serve
+   with its `server.py`, not `http.server`). His notes land append-only in
+   `<page dir>/notes.jsonl`: your work queue; commit it, never rm it.
+5. Post the portal link in your DONE memo, **and give it to the usta in
    chat**: your reply, in your own session, with the full clickable URL.
 
 Good exemplars: the ltx spike gallery, the KFE UI preview.
@@ -179,7 +198,11 @@ Registration (ritual step 3) plugs your session into three things:
   pings, or one line when there are none. Under VSCode nothing pushes a
   ping into your session, so this is how you receive them. Never `tail`
   the log: that re-reads the same pings every tick. `--peek` shows
-  without marking read.
+  without marking read. **Status is not an ask**: a script or tick that
+  reports status pings with `--status`, and `--unread` shows those (and
+  anything from an unidentified `@system` sender) as one line each under
+  a STATUS block; `--full` prints them whole. A ping sent without
+  `--from` is signed with the registered tag of the calling session.
 - **Heartbeats** — if the machine has the `tayfa-beat` Stop hook
   installed (user-level `~/.claude/settings.json`), every registered
   session automatically writes `.presence/beats/<tag>.json` at the end

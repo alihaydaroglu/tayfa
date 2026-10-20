@@ -97,6 +97,47 @@ DEFAULT_STALE_DAYS = 14
 DEFAULT_LIMIT = 40
 
 
+# ── Project switches (tayfa.json) ───────────────────────────────────────
+#
+# `dev/coordination/tayfa.json` holds per-project defaults for the tayfa
+# tools. Missing file, bad JSON or a missing key = the tool's own default.
+# Every switch here is reversible by deleting one key.
+
+def load_tayfa_config(coord_dir: Path) -> dict:
+    try:
+        data = json.loads((coord_dir / "tayfa.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+# ── Memo age ────────────────────────────────────────────────────────────
+#
+# The acknowledgement ritual (`@` -> `#`, then `~~`) is not followed:
+# measured 2026-10-20 on nima, 1,085 memos opened in 30 days, 4 struck.
+# So a memo's AGE is the only signal that it is history. Memo headers
+# carry their date by convention ("### 📐 2026-08-14 — @pm → ..."); a memo
+# dated more than `memo_stale_days` ago (tayfa.json, default 21; 0 = off)
+# drops to the HISTORY footer. Undated memos keep the board-age rule only.
+# Tasks and bugs are never filtered by age.
+
+DEFAULT_MEMO_DAYS = 21
+_HEADER_DATE = re.compile(r"(20\d\d)-(\d\d)-(\d\d)")
+
+
+def memo_age_days(header: str) -> float | None:
+    """Days since the date written in a memo header, or None when it has none."""
+    import datetime as _dt
+    m = _HEADER_DATE.search(header[:80])
+    if not m:
+        return None
+    try:
+        d = _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    return (_dt.date.today() - d).days
+
+
 def board_ages(coord_dir: Path, files: list[Path]) -> dict[str, float]:
     """{filename: fractional days since it last changed}. Falls back to mtime, then to 0.
 
@@ -256,6 +297,9 @@ def main() -> int:
         metavar="N",
         help=f"Max items shown per section (default: {DEFAULT_LIMIT}). 0 for no limit.",
     )
+    parser.add_argument("--memo-days", type=int, default=None, metavar="N",
+                        help=f"Hide memos whose header date is older than N days "
+                             f"(default: tayfa.json memo_stale_days, else {DEFAULT_MEMO_DAYS}). 0 disables.")
     parser.add_argument(
         "--all",
         action="store_true",
@@ -301,6 +345,26 @@ def main() -> int:
             results["memos"] = fresh
             hidden_memos = dormant
 
+    # Per-memo age (see memo_age_days). Applied after the board rule, so the
+    # footer can say how many went for each reason.
+    cfg = load_tayfa_config(coord_dir)
+    if args.all:
+        memo_days = 0
+    elif args.memo_days is not None:
+        memo_days = max(0, args.memo_days)
+    else:
+        try:
+            memo_days = max(0, int(cfg.get("memo_stale_days", DEFAULT_MEMO_DAYS)))
+        except (TypeError, ValueError):
+            memo_days = DEFAULT_MEMO_DAYS
+    aged_memos: list[tuple[Path, int, str]] = []
+    if memo_days:
+        live = []
+        for item in results["memos"]:
+            age = memo_age_days(item[2])
+            (aged_memos if age is not None and age > memo_days else live).append(item)
+        results["memos"] = live
+
     width = 60
     print("=" * width)
     also = f"  (also @{', @'.join(names[1:])})" if len(names) > 1 else ""
@@ -333,20 +397,26 @@ def main() -> int:
                 )
         print()
 
-    if hidden_memos:
-        boards = sorted({f.name for f, _, _ in hidden_memos})
-        head = ", ".join(boards[:6]) + (f", +{len(boards) - 6} more" if len(boards) > 6 else "")
-        print(
-            f"── HISTORY ──\n"
-            f"  {len(hidden_memos)} older memo(s) on {len(boards)} dormant board(s) "
-            f"(no commit in {stale_days}+ days) are not listed:\n"
-            f"    {head}\n"
-            f"  These are a record, not work. To see them: tayfa-inbox --all {tag}"
-        )
+    if hidden_memos or aged_memos:
+        print("── HISTORY ──")
+        if hidden_memos:
+            boards = sorted({f.name for f, _, _ in hidden_memos})
+            head = ", ".join(boards[:6]) + (f", +{len(boards) - 6} more" if len(boards) > 6 else "")
+            print(
+                f"  {len(hidden_memos)} older memo(s) on {len(boards)} dormant board(s) "
+                f"(no commit in {stale_days}+ days) are not listed:\n"
+                f"    {head}"
+            )
+        if aged_memos:
+            print(
+                f"  {len(aged_memos)} memo(s) dated more than {memo_days} days ago are not listed "
+                f"(tayfa-inbox --memo-days 0 {tag} lists them; tayfa.json memo_stale_days sets the default)."
+            )
+        print(f"  These are a record, not work. To see everything: tayfa-inbox --all {tag}")
         print()
 
     if total == 0:
-        print("Inbox zero. You're clear." if not hidden_memos else "Nothing live. You're clear.")
+        print("Inbox zero. You're clear." if not (hidden_memos or aged_memos) else "Nothing live. You're clear.")
     else:
         print(f"Total open items: {total}")
     return 0

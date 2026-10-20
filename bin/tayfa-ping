@@ -24,6 +24,18 @@ Usage:
 --max-chars (default 12000); older unread pings are counted, marked read,
 and the sed command to read them is printed. 0 disables either cap.
 
+Status vs asks (2026-10-20). Measured on nima: 5,697 of 6,700 pings in
+30 days were automated status (hourly WATCH ticks, cron summaries) sent
+with no --from, so every real ask drowned in "@system" noise. Two fixes:
+  - a script that reports status sends with --status; the record is
+    marked "[status]" and --unread shows it as ONE line, not in full
+    (`--full` prints everything; tayfa.json "ping_fold_status": false
+    turns the folding off for the project).
+  - a sender that omits --from is resolved from the registry by PID
+    ancestry (the same read-only match tayfa-beat uses), so an agent's
+    ping is signed with its tag; only a true daemon/cron is "@system",
+    and @system pings are folded like status.
+
 Exit code is 0 if at least one delivery channel succeeded (send) or the
 read completed (--unread), 1 otherwise.
 """
@@ -90,6 +102,71 @@ def tag_names(coord_dir: Path, tag: str) -> list[str]:
     canon = aliases.get(tag, tag)
     return [canon] + sorted(a for a, c in aliases.items() if c == canon)
 
+STATUS_MARK = "[status]"
+_FOLD_SENDERS = {"system"}
+
+
+def load_tayfa_config(coord_dir: Path) -> dict:
+    """dev/coordination/tayfa.json: per-project switches. Missing/bad = {}."""
+    try:
+        data = json.loads((coord_dir / "tayfa.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def ancestor_pids(limit: int = 25) -> list[int]:
+    chain: list[int] = []
+    pid = os.getpid()
+    for _ in range(limit):
+        chain.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+        if ppid <= 1:
+            break
+        pid = ppid
+    return chain
+
+
+def infer_sender(coord_dir: Path) -> str | None:
+    """Which registered agent is calling us? Read-only PID-ancestry match
+    against .presence/*.json (tayfa-beat's method). None when no match."""
+    presence_dir = coord_dir / ".presence"
+    pid_to_tag: dict[int, str] = {}
+    for path in presence_dir.glob("*.json"):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        pid = entry.get("pid")
+        if isinstance(pid, int):
+            pid_to_tag[pid] = entry.get("tag") or path.stem
+    for pid in ancestor_pids():
+        if pid in pid_to_tag:
+            return pid_to_tag[pid]
+    return None
+
+
+_REC_HEAD = re.compile(r"^\[[^\]\n]*\] from @([A-Za-z0-9_]+)(\s*\[status\])?:")
+
+
+def is_status_record(rec: str) -> bool:
+    m = _REC_HEAD.match(rec)
+    if not m:
+        return False
+    return bool(m.group(2)) or m.group(1) in _FOLD_SENDERS
+
+
+def one_line(rec: str, width: int = 110) -> str:
+    first = rec.strip().splitlines()[0] if rec.strip() else ""
+    more = rec.strip().count("\n")
+    out = first if len(first) <= width else first[: width - 1] + "…"
+    return out + (f"  (+{more} more lines)" if more else "")
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -109,7 +186,8 @@ def _parse_cursor(text: str) -> int:
         return 0
 
 
-def read_unread(coord_dir: Path, tag: str, limit: int, max_chars: int, peek: bool) -> int:
+def read_unread(coord_dir: Path, tag: str, limit: int, max_chars: int, peek: bool,
+                fold: bool = True) -> int:
     pings_dir = coord_dir / ".pings"
     ping_log = pings_dir / f"{tag}.log"
     cursor_path = pings_dir / f"{tag}.cursor"
@@ -164,8 +242,22 @@ def read_unread(coord_dir: Path, tag: str, limit: int, max_chars: int, peek: boo
         records = [text[a:b] for a, b in zip(heads, heads[1:] + [len(text)])]
         records = [r for r in records if r.strip()]
 
-        if not records:
+        folded: list[str] = []
+        if fold:
+            folded = [r for r in records if is_status_record(r)]
+            records = [r for r in records if not is_status_record(r)]
+
+        if not records and not folded:
             print(f"no unread pings for @{tag}")
+        elif not records:
+            print(f"── 0 unread ask(s) for @{tag}; {len(folded)} status ping(s), one line each ──")
+            tail = folded[-limit:] if limit > 0 else folded
+            for rec in tail:
+                print("  " + one_line(rec))
+            if len(folded) > len(tail):
+                print(f"  ({len(folded) - len(tail)} older status ping(s) not shown; "
+                      f"tayfa-ping --unread --full --peek {tag} shows them)")
+            print("── " + ("peek: NOT marked read" if peek else "marked read") + " ──")
         else:
             shown: list[str] = []
             used = 0
@@ -190,6 +282,14 @@ def read_unread(coord_dir: Path, tag: str, limit: int, max_chars: int, peek: boo
                 print(f"({skipped} older unread ping(s) not shown: "
                       f"sed -n '{first_line},{last_line}p' {ping_log})")
             sys.stdout.write("".join(shown))
+            if folded:
+                print(f"── {len(folded)} status ping(s), one line each "
+                      f"(tayfa-ping --unread --full --peek {tag} for the text) ──")
+                tail = folded[-limit:] if limit > 0 else folded
+                for rec in tail:
+                    print("  " + one_line(rec))
+                if len(folded) > len(tail):
+                    print(f"  ({len(folded) - len(tail)} older status ping(s) not shown)")
             print("── " + ("peek: NOT marked read" if peek else "marked read") + " ──")
 
         if cur_f is not None:
@@ -219,6 +319,10 @@ def main() -> int:
                         help="With --unread: most pings to show (0 = no cap)")
     parser.add_argument("--max-chars", type=int, default=12000,
                         help="With --unread: most characters to show (0 = no cap)")
+    parser.add_argument("--status", action="store_true",
+                        help="Send: this is a status report, not an ask; readers see it as one line")
+    parser.add_argument("--full", action="store_true",
+                        help="With --unread: show status/@system pings in full instead of one line each")
     args = parser.parse_args()
 
     tag = args.tag.lstrip("@")
@@ -244,10 +348,12 @@ def main() -> int:
         print(f"@{tag} is an alias of @{canon} (aliases.json)")
         tag = canon
 
+    cfg = load_tayfa_config(coord_dir)
     if args.unread:
-        return read_unread(coord_dir, tag, args.limit, args.max_chars, args.peek)
+        fold = (not args.full) and bool(cfg.get("ping_fold_status", True))
+        return read_unread(coord_dir, tag, args.limit, args.max_chars, args.peek, fold=fold)
 
-    sender = args.sender or os.environ.get("TAYFA_TAG", "system")
+    sender = args.sender or os.environ.get("TAYFA_TAG") or infer_sender(coord_dir) or "system"
     sender = sender.lstrip("@")
 
     presence_path = coord_dir / ".presence" / f"{tag}.json"
@@ -256,7 +362,8 @@ def main() -> int:
     ping_log = pings_dir / f"{tag}.log"
 
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    log_line = f"[{timestamp}] from @{sender}: {args.message}\n"
+    mark = f" {STATUS_MARK}" if args.status else ""
+    log_line = f"[{timestamp}] from @{sender}{mark}: {args.message}\n"
 
     # Always: append to durable log (LOCK_EX pairs with --unread's LOCK_SH)
     with ping_log.open("a", encoding="utf-8") as f:

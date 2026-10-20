@@ -114,16 +114,30 @@ fi
 mkdir -p "$COORD_DIR/.presence"
 PRESENCE_FILE="$COORD_DIR/.presence/$TAG.json"
 
-# Duplicate-tag check: refuse if existing entry's PID is still alive.
+# Duplicate-tag check: refuse if existing entry's PID is still alive AND is
+# not our own. Under the VSCode extension the host process outlives the
+# session: a RESUMED session has a new session id but the SAME pid, so
+# it used to hit its own entry here and be refused — then its beats never
+# attributed, the roster showed it asleep for hours, and the do-not-fight
+# protocol told it to go quiet (@telemetry, tayfa_system.md 2026-09-05).
+# A same-pid entry is never a rival; it is the same host coming back.
+# (A same SESSION ID under a different live pid is NOT treated as a
+# resume: forks share a session id, and that case stays a refusal.)
 if [[ -f "$PRESENCE_FILE" ]]; then
     EXISTING_PID="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$PRESENCE_FILE" 2>/dev/null || echo)"
     if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
-        EXISTING_TTY="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('tty',''))" "$PRESENCE_FILE" 2>/dev/null || echo)"
-        echo "ERROR: @$TAG is already registered (PID $EXISTING_PID, tty $EXISTING_TTY)." >&2
-        echo "       Pick a different tag, or end the other session first." >&2
-        exit 2
+        if [[ "$EXISTING_PID" == "$SESSION_PID" ]]; then
+            EXISTING_SID="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('session_id') or '')" "$PRESENCE_FILE" 2>/dev/null || echo)"
+            echo "@$TAG: this host (PID $SESSION_PID) is already registered under session ${EXISTING_SID:-?}."
+            echo "  Same pid, new session: treating it as a RESUME and replacing the entry (not a duplicate)."
+        else
+            EXISTING_TTY="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('tty',''))" "$PRESENCE_FILE" 2>/dev/null || echo)"
+            echo "ERROR: @$TAG is already registered (PID $EXISTING_PID, tty $EXISTING_TTY); this session is PID $SESSION_PID." >&2
+            echo "       Pick a different tag, or end the other session first." >&2
+            exit 2
+        fi
     fi
-    # Stale entry — remove silently.
+    # Stale entry (dead pid) or our own resumed entry — replace it.
     rm -f "$PRESENCE_FILE"
 fi
 
