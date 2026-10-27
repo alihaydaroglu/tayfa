@@ -25,7 +25,11 @@ if [[ "${2:-}" == "--session-id" && -n "${3:-}" ]]; then
     SESSION_ID_ARG="$3"
 fi
 
-if [[ ! "$TAG" =~ ^[a-zA-Z0-9_]+$ ]]; then
+# A hyphen is allowed HERE only so an alias like `doc-refresh` can resolve
+# below (aliases.json maps it to doc_refresh); the canonical tag is
+# re-checked after resolution. Refusing before resolving locked 10 sessions
+# out between 2026-10-20 and 10-27 (@doc_refresh's report).
+if [[ ! "$TAG" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "ERROR: tag must be alphanumeric + underscores (got: $TAG)" >&2
     exit 1
 fi
@@ -69,6 +73,11 @@ if [[ -n "$CANON" && "$CANON" != "$TAG" ]]; then
     echo "@$TAG is an alias of @$CANON ($COORD_DIR/aliases.json): registering as @$CANON."
     echo "  Use '$CANON' for the rest of the ritual — scratchboards/$CANON/, tayfa-inbox $CANON, the boards' @$CANON sections."
     TAG="$CANON"
+fi
+if [[ ! "$TAG" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    echo "ERROR: '$TAG' is not a registered alias and tags are alphanumeric + underscores." >&2
+    echo "       Spell the canonical tag (e.g. ${TAG//-/_}) or add the alias to $COORD_DIR/aliases.json." >&2
+    exit 1
 fi
 
 # Walk up from $PPID skipping transient shells to find the long-lived
