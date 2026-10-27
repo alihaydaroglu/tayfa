@@ -107,6 +107,14 @@ project.
    setup recorded for you (for example the path of your working tree).
    A role **adds** to this ritual; it never replaces or skips a step.
 
+5c. **Your skills, if you have any.** Registration listed every file
+   under `dev/coordination/scratchboards/<tag>/skills/` by name and
+   description. **Do not open them now.** A skill is a procedure only
+   you run (a reboot review, how an episode is published, how a promote
+   is fired); its description is the trigger. When a task matches one,
+   read that skill in full before doing the task. See "Per-agent skills"
+   below for writing one.
+
 6. **Read your items on the workstream file(s) — never the file.**
    Boards run to 100k+ words. **Do not `cat`, Read or skim a board.**
    Open only the `file:line` refs your inbox gave you, plus the
@@ -128,12 +136,54 @@ project.
 ## After the ritual
 
 Tell the user, in 2–3 sentences:
-- The tag you're onboarding as, and your role if you have one.
+- The tag you're onboarding as, your role if you have one, and how
+  many skills registration listed.
 - The shape of your inbox (e.g. "3 open tasks, 1 memo, no bugs").
 - What you're going to do first (the highest-priority item from the
   inbox, or a question if you need clarification).
 
 Then start work.
+
+## Per-agent skills (`scratchboards/<tag>/skills/`)
+
+A **skill** is a procedure with a trigger: "when X, do these steps". A
+project's shared skills (`.claude/skills/` in the repo) are listed in
+EVERY session's prompt and cost every agent tokens whether or not they
+ever fire. A procedure that only one agent runs belongs with that agent:
+
+```
+dev/coordination/scratchboards/<tag>/skills/<name>.md        # one file, or
+dev/coordination/scratchboards/<tag>/skills/<name>/SKILL.md  # Claude Code shape, with helper files beside it
+```
+
+Frontmatter, same as a Claude Code skill, so a skill can move to
+`.claude/skills/` unchanged if it later turns out everyone needs it:
+
+```markdown
+---
+name: zepto-reboot-review
+description: Before ali restarts zepto, inventory what runs ... Use when ali says restart / reboot / power cycle zepto.
+owner: "@zepto"
+---
+```
+
+- `description` is ONE line and is the trigger: say when to use it, in
+  the words the ask arrives in. Registration prints only `name` and
+  `description`; the body is read when the trigger fires.
+- The body is the procedure: commands, the order, the traps. Newest
+  facts on top, stale ones out, like any page the crew reads.
+- A skill belongs to the **canonical** tag. An alias
+  (`aliases.json`) finds the same directory.
+- **Shared by a few agents, not everyone**: keep one copy in the
+  author's `skills/` and give each other agent a symlink in theirs
+  (`ln -s ../../<author>/skills/<name>.md`). Git keeps symlinks. When a
+  third copy wants it, it is a project skill: move it to
+  `.claude/skills/` and leave a pointer.
+- **Which home**: a *role* (`roles/`) is standing instructions read in
+  full at every onboard; a *skill* is read on a trigger; a *runbook*
+  (`runbooks/`) is a procedure any agent might have to run once and must
+  be able to find by grep. The tayfa pulse re-lists your skills after a
+  compaction, the way it re-reads your role.
 
 ## Conventions reminder (when you finish a task)
 

@@ -183,6 +183,43 @@ if [[ -s "$ROLE_FILE" ]]; then
     done < "$ROLE_FILE"
 fi
 
+# Per-agent skills (tayfa-onboard step 5c): procedures that only this agent
+# runs, kept out of the shared skill directories so no other session pays
+# for them (@ali 2026-10-26, via @zepto: "i would like this reboot review to
+# be a skill for you but i dont want it to be in the general md file").
+# A skill is scratchboards/<tag>/skills/<name>.md or <name>/SKILL.md with a
+# `name:` and a one-line `description:` in its frontmatter; the description
+# is the trigger. Listed here by name + description only. The agent opens a
+# skill when its trigger fires, never at onboard. No skills/ dir, no output.
+SKILLS_DIR="$COORD_DIR/scratchboards/$TAG/skills"
+if [[ -d "$SKILLS_DIR" ]]; then
+    skill_files=()
+    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/*/SKILL.md; do
+        [[ -f "$f" ]] && skill_files+=("$f")
+    done
+    if (( ${#skill_files[@]} )); then
+        echo
+        echo "── @$TAG has ${#skill_files[@]} skill(s), yours alone: open one when its trigger fires, not now (tayfa-onboard step 5c) ──"
+        for f in "${skill_files[@]}"; do
+            awk -v path="$f" '
+                NR==1 && $0 != "---" { exit }
+                NR>1  && $0 == "---" { exit }
+                /^name:/        { sub(/^name:[ \t]*/, "");        name=$0 }
+                /^description:/ { sub(/^description:[ \t]*/, ""); desc=$0 }
+                END {
+                    if (name == "") {
+                        n = split(path, parts, "/"); name = parts[n]; sub(/\.md$/, "", name)
+                        if (name == "SKILL") name = parts[n-1]
+                    }
+                    gsub(/^["\047]|["\047]$/, "", desc)
+                    if (length(desc) > 240) desc = substr(desc, 1, 237) "..."
+                    if (desc == "") desc = "(no description: add one, it is the trigger)"
+                    printf "  %s  →  %s\n      %s\n", name, path, desc
+                }' "$f"
+        done
+    fi
+fi
+
 # Show the pings that arrived since this tag last read, and mark them read.
 # The log is permanent history; tayfa-ping --unread keeps a cursor beside it
 # and caps what it prints. Never let a ping problem fail the registration.

@@ -233,6 +233,16 @@ Mode needed.
   step 5b sends the agent to the role file, and the post-compaction
   re-entry has it re-read. A role adds to the ritual, never replaces a
   step. Projects with no `roles/` directory see no change.
+- **Per-agent skills** (optional, per agent). A procedure that only one
+  agent runs lives in `scratchboards/<tag>/skills/<name>.md` (or
+  `<name>/SKILL.md`) with Claude Code skill frontmatter: `name`, a
+  one-line `description` that is the trigger, `owner`. It stays out of
+  the shared skill directories, so no other session pays for it.
+  `register_presence.sh` lists name + description, `tayfa-onboard` step
+  5c says open one only when its trigger fires, and the post-compaction
+  re-entry re-lists them. A few agents share one by symlink; when
+  everyone needs it, it moves to the project's `.claude/skills/`
+  unchanged. No `skills/` directory, no output.
 
 The full conventions live in the scaffolded `README.md` and
 `AGENTS.md` once you run `tayfa-init`.

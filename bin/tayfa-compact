@@ -212,6 +212,9 @@ def cmd_prompt(coord: Path, stdin: dict) -> None:
             "(4b) If your scratchboard has a ROLE file, re-read "
             "dev/coordination/roles/<role>.md for each line in it: a role's "
             "standing rules are what a summary blurs. "
+            "(4c) If dev/coordination/scratchboards/<tag>/skills/ exists, "
+            "re-list its files by name and description (your per-agent "
+            "skills); open one only when a task matches its description. "
             "(5) Rewrite the inflight file fresh — keep only still-true items. "
             "Then continue where you left off.")}}))
 
